@@ -8,6 +8,8 @@ import type { AppState, MatchSummary } from "@/lib/types";
 import BracketView from "./BracketView";
 import styles from "./HomeApp.module.css";
 
+const MARQUEE = "★★★ NO CHEATING, LOSERS ★★★ WORLDWIDE GEOGRAPHICAL COMBAT ★★★";
+
 function emptyState(): AppState {
   return {
     configured: false,
@@ -155,7 +157,7 @@ export default function HomeApp() {
 
   return (
     <main className="page-shell">
-      <div className="marquee"><span>★★★ NO CHEATING, LOSERS ★★★ WORLDWIDE GEOGRAPHICAL COMBAT ★★★</span></div>
+      <div className="marquee"><span>{MARQUEE}</span><span aria-hidden="true">{MARQUEE}</span></div>
       <header className="hero">
         <p className="hero-kicker">🏈 EST. 2026 • BEST VIEWED ON A PHONE PROBABLY 🏈</p>
         <h1>{tournament?.title ?? "DA GEOGUESSERS"}</h1>
