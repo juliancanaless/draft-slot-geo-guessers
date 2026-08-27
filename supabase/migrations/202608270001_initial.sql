@@ -3,7 +3,8 @@ create extension if not exists pgcrypto;
 create table tournaments (
   id uuid primary key default gen_random_uuid(),
   title text not null default 'DA GEOGUESSERS: DRAFT SLOT THUNDERDOME',
-  status text not null default 'lobby' check (status in ('lobby', 'tournament', 'draft_selection', 'complete')),
+  status text not null default 'lobby'
+    check (status in ('lobby', 'tournament', 'draft_selection', 'complete')),
   settings jsonb not null default '{"viewSeconds":60,"locationsPerMatch":3}'::jsonb,
   current_selector_rank integer,
   started_at timestamptz,
@@ -56,6 +57,7 @@ create table ranking_groups (
   current_round integer not null default 0,
   target_size integer not null,
   waiting_player_ids jsonb not null default '[]'::jsonb,
+  advance_key text,
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
@@ -87,8 +89,8 @@ create table challenges (
   location_id uuid not null references locations(id),
   sequence integer not null check (sequence > 0),
   pano_id text not null,
-  actual_lat double precision not null,
-  actual_lng double precision not null,
+  actual_lat double precision not null check (actual_lat between -90 and 90),
+  actual_lng double precision not null check (actual_lng between -180 and 180),
   heading double precision not null,
   pitch double precision not null default 0,
   label text not null,
@@ -133,6 +135,65 @@ create unique index one_active_selector
   on draft_slot_selections (tournament_id)
   where status = 'active';
 
+create or replace function select_draft_slot_atomic(
+  p_tournament_id uuid,
+  p_player_id uuid,
+  p_draft_slot integer
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_rank integer;
+  v_roster_size integer;
+begin
+  perform 1 from tournaments
+    where id = p_tournament_id and status = 'draft_selection'
+    for update;
+  if not found then raise exception 'Draft-slot selection is not active.'; end if;
+
+  select count(*) into v_roster_size from players where tournament_id = p_tournament_id;
+  if p_draft_slot < 1 or p_draft_slot > v_roster_size then
+    raise exception 'That draft slot is not valid.';
+  end if;
+
+  select tournament_rank into v_rank
+    from draft_slot_selections
+    where tournament_id = p_tournament_id
+      and player_id = p_player_id
+      and status = 'active'
+      and draft_slot is null
+    for update;
+  if v_rank is null then raise exception 'It is not your turn.'; end if;
+
+  if exists (
+    select 1 from draft_slot_selections
+    where tournament_id = p_tournament_id and draft_slot = p_draft_slot
+  ) then raise exception 'That slot was just taken. Pick another.'; end if;
+
+  update draft_slot_selections
+    set draft_slot = p_draft_slot, status = 'selected', selected_at = now()
+    where tournament_id = p_tournament_id and player_id = p_player_id;
+
+  if v_rank = v_roster_size then
+    update tournaments
+      set status = 'complete', current_selector_rank = null, completed_at = now()
+      where id = p_tournament_id;
+  else
+    update draft_slot_selections
+      set status = 'active', unlocked_at = now()
+      where tournament_id = p_tournament_id and tournament_rank = v_rank + 1;
+    update tournaments
+      set current_selector_rank = v_rank + 1
+      where id = p_tournament_id;
+  end if;
+end;
+$$;
+
+revoke all on function select_draft_slot_atomic(uuid, uuid, integer) from public, anon, authenticated;
+grant execute on function select_draft_slot_atomic(uuid, uuid, integer) to service_role;
+
 create table admin_events (
   id bigint generated always as identity primary key,
   tournament_id uuid references tournaments(id) on delete set null,
@@ -145,6 +206,7 @@ create index matches_players on matches (player_1_id, player_2_id);
 create index matches_tournament_status on matches (tournament_id, status);
 create index attempts_match_player on attempts (match_id, player_id);
 create index ranking_groups_tournament on ranking_groups (tournament_id, rank_start);
+create index locations_validation on locations (active, validated_at);
 
 alter table tournaments enable row level security;
 alter table players enable row level security;
@@ -159,4 +221,6 @@ alter table admin_events enable row level security;
 comment on table ranking_groups is
   'Recursive ranking brackets. Each group ranks exactly rank_start through rank_end; loser cohorts become child groups.';
 comment on column matches.tie_break_player_id is
-  'Precommitted fallback used only if totals and every per-location distance are exactly tied.';
+  'Precommitted fallback used only if totals and every per-location distance tie exactly.';
+comment on column ranking_groups.advance_key is
+  'Idempotency claim for the phase and round most recently advanced.';

@@ -24,6 +24,7 @@ export type MatchResult = {
 
 export type MatchSummary = {
   id: string;
+  groupId: string;
   groupRankStart: number;
   groupRankEnd: number;
   phase: "play_in" | "knockout";
@@ -44,6 +45,7 @@ export type DraftSelectionSummary = {
   draftSlot: number | null;
   status: "waiting" | "active" | "selected";
   unlockedAt: string | null;
+  selectedAt: string | null;
 };
 
 export type TournamentSummary = {
@@ -63,6 +65,7 @@ export type AppState = {
   matches: MatchSummary[];
   draftSelections: DraftSelectionSummary[];
   me: PlayerSummary | null;
+  serverNow: string;
   message?: string;
 };
 
@@ -82,4 +85,30 @@ export type PlayState = {
   match: MatchSummary;
   challenges: ChallengeState[];
   activeChallenge: ChallengeState | null;
+  serverNow: string;
+  viewSeconds: number;
+};
+
+export type LocationCandidate = {
+  id: string;
+  label: string;
+  country: string;
+  region: string | null;
+  lat: number;
+  lng: number;
+  panoId: string | null;
+  active: boolean;
+  validationError: string | null;
+  validatedAt: string | null;
+};
+
+export type AdminState = {
+  tournament: TournamentSummary | null;
+  players: PlayerSummary[];
+  matches: MatchSummary[];
+  draftSelections: DraftSelectionSummary[];
+  locations: LocationCandidate[];
+  activeLocationCount: number;
+  requiredLocationCount: number;
+  expectedMatchCount: number;
 };

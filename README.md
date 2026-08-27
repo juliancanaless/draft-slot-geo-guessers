@@ -1,36 +1,67 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Draft Slot Geo Guessers
 
-## Getting Started
+A deliberately ridiculous, mobile-first geography tournament that ranks league members, then lets them choose fantasy draft slots in that order. This is the draft-slot draft—not the fantasy draft.
 
-First, run the development server:
+Production: [draft.jc-sync.com](https://draft.jc-sync.com)
+
+## How it works
+
+- The commissioner configures 4–32 players (the intended league currently has 12), 60 viewing seconds, and three locations per matchup.
+- Everyone claims a predetermined name with a browser-local token. There are no accounts or passwords.
+- A recursive knockout/placement bracket creates an exact 1–N ranking. A 12-player tournament uses four play-ins, four byes, and 20 total matches including placement matches.
+- Both players get the same unique panoramas and camera headings. Each location is no-move Street View followed by one permanent world-map guess.
+- Server timestamps survive refreshes. Answers and all distances stay hidden until both players finish.
+- Lowest aggregate Haversine distance wins. Ties compare each location in order; a still-exact tie goes to the lower precommitted random seed.
+- Rank 1 chooses any draft slot, then rank 2, and so on. A Postgres function locks and advances this queue atomically.
+
+## Local development
 
 ```bash
+npm install
+vercel env pull .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The app runs at `http://localhost:3002` because port 3000 is already used on the development machine.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Useful checks:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm test
+npm run typecheck
+npm run lint
+npm run build
+```
 
-## Learn More
+To enter `/admin`, copy the configured secret without printing it:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run admin-secret
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## External services
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Required Vercel variables:
 
-## Deploy on Vercel
+```text
+SUPABASE_URL                      server only
+SUPABASE_SECRET_KEY               server only
+ADMIN_SECRET                      server only
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY   browser safe, referrer restricted
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Supabase migrations live in `supabase/migrations`. Apply them with `supabase db push` after linking the project.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The Google project needs billing and Maps JavaScript API enabled. The browser key should allow only the required API and these referrers:
+
+```text
+http://localhost:3002/*
+https://draft.jc-sync.com/*
+https://draft-slot-geo-guessers.vercel.app/*
+```
+
+The commissioner validates the curated worldwide candidate pool from `/admin`; this resolves each candidate to a real Google-owned Street View panorama before the tournament can start. The initial page never loads Google Maps.
+
+## Recovery model
+
+This is a private friends app, so recovery is intentionally manual. The admin screen can reset claims and broken attempts, force an unfinished matchup winner, undo the draft queue, or delete the current tournament while retaining validated locations. Destructive buttons require browser confirmation and actions are audited.

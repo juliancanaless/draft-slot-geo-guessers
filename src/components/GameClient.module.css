@@ -1,0 +1,13 @@
+.gameShell { min-height: 100dvh; display: flex; flex-direction: column; background: #16052e; color: #fff; }
+.gameHeader { min-height: 62px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 4px ridge #ffdc41; background: linear-gradient(#8e20df, #3b0c82); text-align: center; text-shadow: 2px 2px #000; }
+.gameHeader a { text-decoration: underline; }
+.gameHeader span { font-size: .75rem; }
+.playArea { position: relative; flex: 1; min-height: calc(100dvh - 62px); overflow: hidden; }
+.mapCanvas { position: absolute; inset: 0; background: #0b011c; }
+.loadingCurtain { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; padding: 20px; background: repeating-linear-gradient(45deg, #391080 0 20px, #6814ab 20px 40px); font-size: clamp(1.5rem, 8vw, 3.5rem); text-align: center; text-shadow: 3px 3px #000; }
+.loadingCurtain small, .loadingCurtain b { display: block; font-family: "Courier New", monospace; font-size: .8rem; }
+.timer { position: absolute; top: 12px; right: 12px; width: 68px; height: 68px; display: grid; place-content: center; border: 5px outset #fff; border-radius: 50%; background: #e90071; font-size: 2rem; text-shadow: 2px 2px #000; }
+.guessButton { position: absolute; z-index: 2; right: 15px; bottom: max(15px, env(safe-area-inset-bottom)); left: 15px; width: calc(100% - 30px); }
+.guessPrompt { position: absolute; top: 12px; left: 50%; padding: 8px 12px; border: 3px outset #fff; background: #48128e; transform: translateX(-50%); text-align: center; text-shadow: 2px 2px #000; white-space: nowrap; }
+.centerCard { width: min(92%, 650px); margin: auto; color: #17032f; text-align: center; }
+@media (max-width: 600px) { .gameHeader { grid-template-columns: auto 1fr; } .gameHeader span { display: none; } }

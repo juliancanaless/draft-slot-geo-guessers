@@ -1,0 +1,10 @@
+.label { display: grid; gap: 5px; margin: 10px 0; font-family: "Courier New", monospace; font-weight: 900; }
+.input, .textarea { width: 100%; padding: 10px; border: 4px inset #ddd; border-radius: 0; background: #fff; color: #17032e; font-family: "Courier New", monospace; }
+.textarea { min-height: 230px; resize: vertical; }
+.settings { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.adminList { display: grid; gap: 9px; }
+.adminList > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; border: 2px solid #3e146d; background: #fff; }
+.adminList .btn { min-height: 38px; padding: 5px 9px; font-size: .75rem; }
+.footer { display: flex; justify-content: space-between; padding: 20px 0 40px; color: #fff; }
+.footer button { border: 0; background: none; color: inherit; cursor: pointer; text-decoration: underline; }
+@media (max-width: 600px) { .settings { grid-template-columns: 1fr; } }
