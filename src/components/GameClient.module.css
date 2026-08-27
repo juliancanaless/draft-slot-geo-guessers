@@ -2,7 +2,9 @@
 .gameHeader { min-height: 62px; display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 8px 12px; border-bottom: 4px ridge #ffdc41; background: linear-gradient(#8e20df, #3b0c82); text-align: center; text-shadow: 2px 2px #000; }
 .gameHeader a { text-decoration: underline; }
 .gameHeader span { font-size: .75rem; }
-.playArea { position: relative; flex: 1; min-height: calc(100dvh - 62px); overflow: hidden; }
+/* flex:1 already claims whatever the header leaves, and hardcoding the header height here
+   is what forced the matchup to be hidden rather than wrapped. */
+.playArea { position: relative; flex: 1; overflow: hidden; }
 .mapCanvas { position: absolute; inset: 0; background: #0b011c; }
 .loadingCurtain { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; padding: 20px; background: repeating-linear-gradient(45deg, #391080 0 20px, #6814ab 20px 40px); font-size: clamp(1.5rem, 8vw, 3.5rem); text-align: center; text-shadow: 3px 3px #000; }
 .loadingCurtain small, .loadingCurtain b { display: block; font-family: "Courier New", monospace; font-size: .8rem; }
@@ -12,4 +14,6 @@
 .guessButton { position: absolute; z-index: 2; right: 15px; bottom: max(15px, env(safe-area-inset-bottom)); left: 15px; width: calc(100% - 30px); }
 .guessPrompt { position: absolute; top: 12px; left: 50%; padding: 8px 12px; border: 3px outset #fff; background: #48128e; transform: translateX(-50%); text-align: center; text-shadow: 2px 2px #000; white-space: nowrap; }
 .centerCard { width: min(92%, 650px); margin: auto; color: #17032f; text-align: center; }
-@media (max-width: 600px) { .gameHeader { grid-template-columns: auto 1fr; } .gameHeader span { display: none; } }
+/* Give the matchup its own row rather than hiding it — on a phone you still need to know
+   who you are playing, and long names will not fit beside the location counter. */
+@media (max-width: 600px) { .gameHeader { grid-template-columns: auto 1fr; } .gameHeader span { grid-column: 1 / -1; } }
