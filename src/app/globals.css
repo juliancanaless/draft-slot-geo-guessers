@@ -1,0 +1,181 @@
+:root {
+  --ink: #12052c;
+  --paper: #fff8cf;
+  --purple: #6828db;
+  --purple-dark: #32106f;
+  --cyan: #00e6ff;
+  --lime: #c6ff00;
+  --hot: #ff2fa8;
+  --orange: #ff8a00;
+  --danger: #f02d2d;
+  --line: 3px solid var(--ink);
+}
+
+* { box-sizing: border-box; }
+
+html { min-height: 100%; background: #1f0748; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 10px 10px, #ffffff2e 1.5px, transparent 2px) 0 0 / 20px 20px,
+    linear-gradient(145deg, #260968 0%, #6d11a4 50%, #15185d 100%);
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", Arial, sans-serif;
+  text-rendering: geometricPrecision;
+}
+
+button, input, select, textarea { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+a { color: inherit; text-decoration: none; }
+
+.page-shell {
+  width: min(100%, 1080px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+.marquee {
+  overflow: hidden;
+  border: var(--line);
+  background: #0d0525;
+  color: var(--lime);
+  box-shadow: 4px 4px 0 #000;
+  white-space: nowrap;
+}
+
+.marquee span {
+  display: inline-block;
+  min-width: 100%;
+  padding: 7px 12px;
+  animation: crawl 16s linear infinite;
+  letter-spacing: 1px;
+}
+
+@keyframes crawl {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
+}
+
+.hero {
+  margin: 12px 0;
+  padding: 18px 12px;
+  border: 5px ridge #f7d12a;
+  background: linear-gradient(#ff35bc, #6c24df 48%, #00b8e8);
+  color: white;
+  text-align: center;
+  text-shadow: 3px 3px 0 #000, -1px -1px 0 #000;
+  box-shadow: 6px 6px 0 #090013;
+}
+
+.hero-kicker {
+  margin: 0 0 5px;
+  color: var(--lime);
+  font-family: "Courier New", monospace;
+  font-size: clamp(.78rem, 3vw, 1rem);
+  font-weight: 900;
+  letter-spacing: 2px;
+}
+
+.hero h1 {
+  margin: 0;
+  font-size: clamp(2rem, 9vw, 4.5rem);
+  line-height: .88;
+  letter-spacing: 1px;
+}
+
+.hero-subtitle {
+  margin: 10px 0 0;
+  font-family: "Courier New", monospace;
+  font-size: clamp(.8rem, 3vw, 1.05rem);
+  font-weight: 900;
+}
+
+.panel {
+  margin: 12px 0;
+  padding: 14px;
+  border: 4px outset #fff2a8;
+  background: var(--paper);
+  box-shadow: 5px 5px 0 #090013;
+}
+
+.panel-purple {
+  color: white;
+  background: linear-gradient(135deg, #310c81, #781eb4);
+  text-shadow: 2px 2px 0 #000;
+}
+
+.panel-title {
+  margin: 0 0 12px;
+  padding-bottom: 7px;
+  border-bottom: 4px double currentColor;
+  font-size: clamp(1.3rem, 5vw, 2rem);
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.pixel-copy { font-family: "Courier New", monospace; font-weight: 800; }
+.big-number { color: var(--hot); font-size: 2.3em; text-shadow: 2px 2px 0 #000; }
+
+.btn {
+  min-height: 50px;
+  padding: 10px 16px;
+  border: 4px outset #fff;
+  border-radius: 0;
+  color: #12052c;
+  background: linear-gradient(#f7ff54, #7be700);
+  box-shadow: 4px 4px 0 #090013;
+  cursor: pointer;
+  font-size: 1.05rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.btn:active { transform: translate(3px, 3px); border-style: inset; box-shadow: 1px 1px 0 #090013; }
+.btn:disabled { cursor: not-allowed; filter: grayscale(1); opacity: .5; }
+.btn-hot { color: white; background: linear-gradient(#ff65ce, #e40072); text-shadow: 2px 2px #000; }
+.btn-blue { color: white; background: linear-gradient(#2cecff, #1685d8); text-shadow: 2px 2px #000; }
+.btn-danger { color: white; background: linear-gradient(#ff754d, #b90020); text-shadow: 2px 2px #000; }
+
+.button-row { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+
+.status-pill {
+  display: inline-block;
+  padding: 4px 8px;
+  border: 2px solid currentColor;
+  background: #fff;
+  color: #32106f;
+  font-family: "Courier New", monospace;
+  font-size: .74rem;
+  font-weight: 900;
+  text-shadow: none;
+  text-transform: uppercase;
+}
+
+.error-box, .notice-box {
+  margin: 10px 0;
+  padding: 10px;
+  border: var(--line);
+  background: #fff;
+  font-family: "Courier New", monospace;
+  font-weight: 900;
+}
+
+.error-box { color: #95000d; background: #ffd5d5; }
+.notice-box { color: #164000; background: #eaffb8; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) { .marquee span { animation: none; } }
