@@ -7,6 +7,8 @@ import { loadGoogleMaps } from "@/lib/google-maps";
 import type { ChallengeState, PlayState } from "@/lib/types";
 import styles from "./GameClient.module.css";
 
+const LOAD_TIMEOUT_MS = 15000;
+
 type PlayAction = "prepare" | "start" | "finish-viewing" | "submit-guess";
 
 function challengeLabel(challenge: ChallengeState | null, total: number) {
@@ -123,7 +125,7 @@ export default function GameClient({ matchId }: { matchId: string }) {
   );
 }
 
-function StreetView({ challenge, busy, remaining, onLoaded, onGuess }: {
+export function StreetView({ challenge, busy, remaining, onLoaded, onGuess }: {
   challenge: ChallengeState;
   busy: boolean;
   remaining: number;
@@ -136,6 +138,7 @@ function StreetView({ challenge, busy, remaining, onLoaded, onGuess }: {
 
   useEffect(() => {
     let cancelled = false;
+    let watchdog: ReturnType<typeof setTimeout>;
     void loadGoogleMaps().then((maps) => {
       if (cancelled || !containerRef.current || !challenge.panoId) return;
       const panorama = new maps.StreetViewPanorama(containerRef.current, {
@@ -153,27 +156,39 @@ function StreetView({ challenge, busy, remaining, onLoaded, onGuess }: {
         zoomControl: true,
       });
       const listener = panorama.addListener("status_changed", () => {
-        if (panorama.getStatus() === maps.StreetViewStatus.OK && !startedRef.current) {
+        const status = panorama.getStatus();
+        if (status === maps.StreetViewStatus.OK) {
+          if (startedRef.current) return;
           startedRef.current = true;
           onLoaded();
+          return;
         }
+        // A retired or unreachable pano never reports OK, so without this the curtain
+        // hangs forever and the whole bracket waits on this player.
+        setMapError(`Street View would not load this spot (${status}). Reload once, and if it still fails ask the commissioner to sort this match out.`);
       });
+      // Some failures never fire status_changed at all, so time the load out on our own.
+      watchdog = setTimeout(() => {
+        if (!startedRef.current) {
+          setMapError("Street View is not responding. Check your connection and reload. If it keeps failing, ask the commissioner to sort this match out.");
+        }
+      }, LOAD_TIMEOUT_MS);
       return () => listener.remove();
     }).catch((cause) => setMapError(cause instanceof Error ? cause.message : "Street View failed."));
-    return () => { cancelled = true; };
+    return () => { cancelled = true; clearTimeout(watchdog); };
   }, [challenge.heading, challenge.panoId, challenge.pitch, onLoaded]);
 
   return (
     <section className={styles.playArea}>
       <div ref={containerRef} className={styles.mapCanvas} />
       {challenge.status === "prepared" && <div className={styles.loadingCurtain}>LOADING STREET VIEW...<small>THE TIMER STARTS WHEN THIS DISAPPEARS</small>{mapError && <b>{mapError}</b>}</div>}
-      {challenge.status === "viewing" && <div className={styles.timer}>{remaining}</div>}
+      {challenge.status === "viewing" && <div className={styles.timer}><span>TIME LEFT</span><strong>{remaining}</strong><small>SECONDS</small></div>}
       {challenge.status === "viewing" && <button className={`${styles.guessButton} btn btn-hot`} disabled={busy} onClick={onGuess}>GUESS NOW</button>}
     </section>
   );
 }
 
-function GuessMap({ busy, guess, setGuess, submit }: {
+export function GuessMap({ busy, guess, setGuess, submit }: {
   busy: boolean;
   guess: { lat: number; lng: number } | null;
   setGuess: (guess: { lat: number; lng: number }) => void;

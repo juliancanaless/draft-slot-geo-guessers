@@ -9,6 +9,7 @@ import {
   resetAttempt,
   resetPlayerClaim,
   resetLocationValidation,
+  resetQualifierAttempt,
   resetTournament,
   saveLocationValidation,
   seedLocationPool,
@@ -77,6 +78,9 @@ export async function POST(request: Request) {
       return Response.json(
         await resetAttempt(requiredString(body, "matchId"), requiredString(body, "playerId")),
       );
+    }
+    if (action === "reset-qualifier-attempt") {
+      return Response.json(await resetQualifierAttempt(requiredString(body, "playerId")));
     }
     if (action === "override-winner") {
       return Response.json(

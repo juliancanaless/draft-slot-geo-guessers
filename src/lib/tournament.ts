@@ -10,11 +10,12 @@ export function highestPowerOfTwoAtMost(value: number) {
   return 2 ** Math.floor(Math.log2(value));
 }
 
-export function pair<T>(entrants: T[]): Array<[T, T]> {
+export function pairHighLow<T>(entrants: T[]): Array<[T, T]> {
   if (entrants.length % 2 !== 0) throw new Error("Cannot pair an odd number of entrants.");
-  const pairings: Array<[T, T]> = [];
-  for (let index = 0; index < entrants.length; index += 2) pairings.push([entrants[index], entrants[index + 1]]);
-  return pairings;
+  return Array.from({ length: entrants.length / 2 }, (_, index) => [
+    entrants[index],
+    entrants[entrants.length - index - 1],
+  ]);
 }
 
 export function openingRound<T>(entrants: T[]): OpeningRound<T> {
@@ -24,14 +25,19 @@ export function openingRound<T>(entrants: T[]): OpeningRound<T> {
   const byeCount = entrants.length - playInMatchCount * 2;
 
   if (playInMatchCount === 0) {
-    return { targetSize, byes: [], pairings: pair(entrants), phase: "knockout" };
+    return { targetSize, byes: [], pairings: pairHighLow(entrants), phase: "knockout" };
   }
   return {
     targetSize,
     byes: entrants.slice(0, byeCount),
-    pairings: pair(entrants.slice(byeCount)),
+    pairings: pairHighLow(entrants.slice(byeCount)),
     phase: "play_in",
   };
+}
+
+export function byeCount(size: number) {
+  if (size < 2) return 0;
+  return openingRound(Array.from({ length: size }, (_, index) => index)).byes.length;
 }
 
 export function rankingMatchCount(size: number): number {
@@ -43,6 +49,18 @@ export function rankingMatchCount(size: number): number {
   if (playInLosers > 1) total += rankingMatchCount(playInLosers);
   for (let cohort = targetSize / 2; cohort > 1; cohort /= 2) total += rankingMatchCount(cohort);
   return total;
+}
+
+export function locationsNeeded(size: number, locationsPerMatch: number) {
+  return rankingMatchCount(size) * locationsPerMatch
+    + (highestPowerOfTwoAtMost(size) === size ? 0 : 1);
+}
+
+/** Biggest roster the given pool of validated locations can actually start. */
+export function rosterCapacity(activeLocations: number, locationsPerMatch: number) {
+  let size = 1;
+  while (locationsNeeded(size + 1, locationsPerMatch) <= activeLocations) size += 1;
+  return size;
 }
 
 export function shuffled<T>(values: T[], random: () => number = Math.random) {

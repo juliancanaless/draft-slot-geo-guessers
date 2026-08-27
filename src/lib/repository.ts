@@ -5,7 +5,7 @@ import { createClaimToken, hashToken } from "./auth";
 import { HttpError } from "./http";
 import { compareDistanceCards, haversineKm } from "./scoring";
 import { hasSupabase, supabaseAdmin } from "./supabase";
-import { openingRound, pair, rankingMatchCount, shuffled } from "./tournament";
+import { highestPowerOfTwoAtMost, locationsNeeded, openingRound, pairHighLow, rankingMatchCount, shuffled } from "./tournament";
 import type {
   AdminState,
   AppState,
@@ -17,13 +17,15 @@ import type {
   MatchSummary,
   PlayState,
   PlayerSummary,
+  QualifierPlayState,
+  QualifierSummary,
   TournamentSummary,
 } from "./types";
 
 type TournamentRow = {
   id: string;
   title: string;
-  status: "lobby" | "tournament" | "draft_selection" | "complete";
+  status: "lobby" | "qualifier" | "tournament" | "draft_selection" | "complete";
   settings: { viewSeconds?: number; locationsPerMatch?: number };
   current_selector_rank: number | null;
   created_at: string;
@@ -118,6 +120,33 @@ type DraftRow = {
   status: "waiting" | "active" | "selected";
   unlocked_at: string | null;
   selected_at: string | null;
+};
+
+type QualifierRow = {
+  id: string;
+  tournament_id: string;
+  location_id: string;
+  pano_id: string;
+  actual_lat: number;
+  actual_lng: number;
+  heading: number;
+  pitch: number;
+  label: string;
+  country: string;
+  status: "open" | "complete";
+};
+
+type QualifierAttemptRow = {
+  id: string;
+  qualifier_id: string;
+  player_id: string;
+  prepared_at: string;
+  started_at: string | null;
+  expires_at: string | null;
+  guessed_lat: number | null;
+  guessed_lng: number | null;
+  distance_km: number | null;
+  submitted_at: string | null;
 };
 
 type ResultLike<T> = { data: T | null; error: { message: string; code?: string } | null };
@@ -318,6 +347,7 @@ function buildMatchSummaries(input: {
       groupRankEnd: group.rank_end,
       phase: match.phase,
       roundNumber: match.round_number,
+      matchIndex: match.match_index,
       player1: asPlayerSummary(player1),
       player2: asPlayerSummary(player2),
       status: match.status,
@@ -329,6 +359,45 @@ function buildMatchSummaries(input: {
   });
 }
 
+async function qualifierSummary(
+  client: SupabaseClient,
+  tournamentId: string,
+  players: PlayerRow[],
+  me: PlayerRow | null,
+): Promise<QualifierSummary | null> {
+  const qualifierResult = await client
+    .from("qualifiers")
+    .select("*")
+    .eq("tournament_id", tournamentId)
+    .maybeSingle();
+  if (qualifierResult.error) take(qualifierResult);
+  const qualifier = qualifierResult.data as QualifierRow | null;
+  if (!qualifier) return null;
+  const attempts = take(
+    await client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id),
+  ) as QualifierAttemptRow[];
+  const submitted = attempts.filter((attempt) => attempt.submitted_at);
+  const playerMap = new Map(players.map((player) => [player.id, player]));
+  const rankings = qualifier.status === "complete"
+    ? submitted
+      .sort((left, right) => (left.distance_km ?? Infinity) - (right.distance_km ?? Infinity))
+      .map((attempt) => ({
+        playerId: attempt.player_id,
+        playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
+        seed: playerMap.get(attempt.player_id)?.seed ?? 0,
+        distanceKm: attempt.distance_km as number,
+      }))
+      .sort((left, right) => left.seed - right.seed)
+    : null;
+  return {
+    status: qualifier.status,
+    submittedCount: submitted.length,
+    totalPlayers: players.length,
+    meSubmitted: Boolean(me && submitted.some((attempt) => attempt.player_id === me.id)),
+    rankings,
+  };
+}
+
 export async function getAppState(identity: Identity | null): Promise<AppState> {
   const serverNow = new Date().toISOString();
   if (!hasSupabase()) {
@@ -338,6 +407,7 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
       players: [],
       matches: [],
       draftSelections: [],
+      qualifier: null,
       me: null,
       serverNow,
       message: "Server environment variables are not configured yet.",
@@ -353,6 +423,7 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
       players: [],
       matches: [],
       draftSelections: [],
+      qualifier: null,
       me: null,
       serverNow,
       message: "The commissioner still needs to configure the roster.",
@@ -370,6 +441,7 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
     unlockedAt: draft.unlocked_at,
     selectedAt: draft.selected_at,
   }));
+  const qualifier = await qualifierSummary(client, tournament.id, core.players, core.me);
 
   return {
     configured: true,
@@ -377,6 +449,7 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
     players: core.players.map(asPlayerSummary),
     matches: buildMatchSummaries(core),
     draftSelections,
+    qualifier,
     me: core.me ? asPlayerSummary(core.me) : null,
     serverNow,
   };
@@ -520,6 +593,13 @@ async function createMatch(
     .select("location_id")
     .eq("tournament_id", tournament.id);
   const used = new Set((take(usedResult) as Array<{ location_id: string }>).map((row) => row.location_id));
+  const qualifierResult = await client
+    .from("qualifiers")
+    .select("location_id")
+    .eq("tournament_id", tournament.id)
+    .maybeSingle();
+  if (qualifierResult.error) take(qualifierResult);
+  if (qualifierResult.data) used.add((qualifierResult.data as { location_id: string }).location_id);
   const challengeCount = tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH;
   const available = shuffled((await activeLocations(client)).filter((location) => !used.has(location.id)));
   if (available.length < challengeCount) {
@@ -548,6 +628,13 @@ async function createMatch(
   return match.id;
 }
 
+async function sortedEntrantsBySeed(client: SupabaseClient, entrantIds: string[]) {
+  const rows = take(
+    await client.from("players").select("id, seed").in("id", entrantIds),
+  ) as Array<{ id: string; seed: number }>;
+  return rows.sort((left, right) => left.seed - right.seed).map((player) => player.id);
+}
+
 async function createRankingGroup(
   client: SupabaseClient,
   tournament: TournamentRow,
@@ -560,7 +647,8 @@ async function createRankingGroup(
     return null;
   }
 
-  const plan = openingRound(entrants);
+  const seededEntrants = await sortedEntrantsBySeed(client, entrants);
+  const plan = openingRound(seededEntrants);
   const group = one(
     await client
       .from("ranking_groups")
@@ -600,7 +688,11 @@ export async function startTournament() {
   }
 
   const expectedMatches = rankingMatchCount(players.length);
-  const requiredLocations = expectedMatches * (tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH);
+  const needsQualifier = highestPowerOfTwoAtMost(players.length) !== players.length;
+  const requiredLocations = locationsNeeded(
+    players.length,
+    tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH,
+  );
   const validatedLocations = await activeLocations(client);
   if (validatedLocations.length < requiredLocations) {
     throw new HttpError(
@@ -622,21 +714,36 @@ export async function startTournament() {
     take(await client.from("players").update({ seed: index + 1 }).eq("id", seededPlayers[index].id));
   }
 
-  await createRankingGroup(
-    client,
-    tournament,
-    seededPlayers.map((player) => player.id),
-    1,
-  );
-  take(
-    await client
-      .from("tournaments")
-      .update({ status: "tournament", started_at: new Date().toISOString() })
-      .eq("id", tournament.id)
-      .eq("status", "lobby"),
-  );
+  if (needsQualifier) {
+    const location = shuffled(validatedLocations)[0];
+    take(
+      await client.from("qualifiers").insert({
+        tournament_id: tournament.id,
+        location_id: location.id,
+        pano_id: location.pano_id,
+        actual_lat: location.lat,
+        actual_lng: location.lng,
+        heading: location.heading,
+        pitch: location.pitch,
+        label: location.label,
+        country: location.country,
+      }),
+    );
+    take(
+      await client
+        .from("tournaments")
+        .update({ status: "qualifier", started_at: new Date().toISOString() })
+        .eq("id", tournament.id)
+        .eq("status", "lobby"),
+    );
+    await audit(client, tournament.id, "start_qualifier", { expectedMatches, requiredLocations });
+    return { expectedMatches, qualifier: true };
+  }
+
+  await createRankingGroup(client, tournament, seededPlayers.map((player) => player.id), 1);
+  take(await client.from("tournaments").update({ status: "tournament", started_at: new Date().toISOString() }).eq("id", tournament.id).eq("status", "lobby"));
   await audit(client, tournament.id, "start_tournament", { expectedMatches, requiredLocations });
-  return { expectedMatches };
+  return { expectedMatches, qualifier: false };
 }
 
 async function maybeStartDraftSelection(client: SupabaseClient, tournamentId: string) {
@@ -723,8 +830,8 @@ async function advanceGroup(client: SupabaseClient, groupId: string) {
         group.id,
       );
     }
-    const survivors = [...group.waiting_player_ids, ...winners];
-    const pairings = pair(survivors);
+    const survivors = await sortedEntrantsBySeed(client, [...group.waiting_player_ids, ...winners]);
+    const pairings = pairHighLow(survivors);
     for (let index = 0; index < pairings.length; index += 1) {
       await createMatch(client, tournament, group.id, "knockout", 0, index, pairings[index]);
     }
@@ -768,7 +875,7 @@ async function advanceGroup(client: SupabaseClient, groupId: string) {
     group.rank_start + winners.length,
     group.id,
   );
-  const pairings = pair(winners);
+  const pairings = pairHighLow(await sortedEntrantsBySeed(client, winners));
   for (let index = 0; index < pairings.length; index += 1) {
     await createMatch(
       client,
@@ -843,6 +950,148 @@ async function finalizeMatchIfReady(client: SupabaseClient, matchId: string) {
     .maybeSingle();
   if (completion.error) take(completion);
   if (completion.data) await advanceGroup(client, match.group_id);
+}
+
+async function qualifierRows(client: SupabaseClient, player: PlayerRow) {
+  const qualifier = one(
+    await client.from("qualifiers").select("*").eq("tournament_id", player.tournament_id).single(),
+    "The bye-week qualifier does not exist.",
+  ) as QualifierRow;
+  const attemptResult = await client
+    .from("qualifier_attempts")
+    .select("*")
+    .eq("qualifier_id", qualifier.id)
+    .eq("player_id", player.id)
+    .maybeSingle();
+  if (attemptResult.error) take(attemptResult);
+  return { qualifier, attempt: attemptResult.data as QualifierAttemptRow | null };
+}
+
+export async function getQualifierPlayState(identity: Identity | null): Promise<QualifierPlayState> {
+  const client = supabaseAdmin();
+  const player = await requirePlayer(client, identity);
+  const { qualifier, attempt } = await qualifierRows(client, player);
+  const tournament = one(
+    await client.from("tournaments").select("settings").eq("id", player.tournament_id).single(),
+  ) as { settings: { viewSeconds?: number } };
+  const submittedResult = await client
+    .from("qualifier_attempts")
+    .select("id", { count: "exact", head: true })
+    .eq("qualifier_id", qualifier.id)
+    .not("submitted_at", "is", null);
+  if (submittedResult.error) take(submittedResult);
+  const playerCountResult = await client
+    .from("players")
+    .select("id", { count: "exact", head: true })
+    .eq("tournament_id", player.tournament_id);
+  if (playerCountResult.error) take(playerCountResult);
+
+  let status: ChallengeState["status"] = "ready";
+  if (attempt?.submitted_at) status = "submitted";
+  else if (attempt && !attempt.started_at) status = "prepared";
+  else if (attempt?.expires_at && new Date(attempt.expires_at).getTime() > Date.now()) status = "viewing";
+  else if (attempt?.started_at) status = "guessing";
+  const canSeePano = status === "prepared" || status === "viewing";
+
+  let results: QualifierPlayState["results"] = null;
+  if (qualifier.status === "complete") {
+    const [attemptsResult, playersResult] = await Promise.all([
+      client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id),
+      client.from("players").select("*").eq("tournament_id", player.tournament_id),
+    ]);
+    const attempts = take(attemptsResult) as QualifierAttemptRow[];
+    const players = take(playersResult) as PlayerRow[];
+    const playerMap = new Map(players.map((item) => [item.id, item]));
+    results = {
+      actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
+      rankings: attempts
+        .filter((item) => item.submitted_at)
+        .map((item) => ({ playerId: item.player_id, playerName: playerMap.get(item.player_id)?.name ?? "Unknown Bozo", seed: playerMap.get(item.player_id)?.seed ?? 0, distanceKm: item.distance_km as number }))
+        .sort((left, right) => left.seed - right.seed),
+    };
+  }
+
+  return {
+    challenge: {
+      id: qualifier.id,
+      sequence: 1,
+      status,
+      ...(canSeePano ? { panoId: qualifier.pano_id, heading: qualifier.heading, pitch: qualifier.pitch } : {}),
+      ...(attempt?.expires_at ? { expiresAt: attempt.expires_at } : {}),
+    },
+    serverNow: new Date().toISOString(),
+    viewSeconds: tournament.settings.viewSeconds ?? DEFAULT_VIEW_SECONDS,
+    submittedCount: submittedResult.count ?? 0,
+    totalPlayers: playerCountResult.count ?? 0,
+    results,
+  };
+}
+
+export async function prepareQualifier(identity: Identity | null) {
+  const client = supabaseAdmin();
+  const player = await requirePlayer(client, identity);
+  const tournament = await latestTournament(client);
+  if (!tournament || tournament.id !== player.tournament_id || tournament.status !== "qualifier") throw new HttpError(409, "The qualifier is not open.");
+  const { qualifier, attempt } = await qualifierRows(client, player);
+  if (!attempt) {
+    const result = await client.from("qualifier_attempts").insert({ qualifier_id: qualifier.id, player_id: player.id });
+    if (result.error && result.error.code !== "23505") take(result);
+  }
+  return getQualifierPlayState(identity);
+}
+
+export async function startQualifier(identity: Identity | null) {
+  const client = supabaseAdmin();
+  const player = await requirePlayer(client, identity);
+  const { attempt } = await qualifierRows(client, player);
+  if (!attempt) throw new HttpError(409, "Load Street View before starting.");
+  if (!attempt.started_at) {
+    const tournament = one(await client.from("tournaments").select("settings, status").eq("id", player.tournament_id).single()) as { settings: { viewSeconds?: number }; status: string };
+    if (tournament.status !== "qualifier") throw new HttpError(409, "The qualifier is not open.");
+    const started = new Date();
+    take(await client.from("qualifier_attempts").update({ started_at: started.toISOString(), expires_at: new Date(started.getTime() + (tournament.settings.viewSeconds ?? DEFAULT_VIEW_SECONDS) * 1000).toISOString() }).eq("id", attempt.id).is("started_at", null));
+  }
+  return getQualifierPlayState(identity);
+}
+
+export async function finishQualifierViewing(identity: Identity | null) {
+  const client = supabaseAdmin();
+  const player = await requirePlayer(client, identity);
+  const { attempt } = await qualifierRows(client, player);
+  if (!attempt?.started_at) throw new HttpError(409, "The qualifier timer has not started.");
+  take(await client.from("qualifier_attempts").update({ expires_at: new Date().toISOString() }).eq("id", attempt.id).is("submitted_at", null));
+  return getQualifierPlayState(identity);
+}
+
+async function finalizeQualifierIfReady(client: SupabaseClient, qualifier: QualifierRow) {
+  const players = take(await client.from("players").select("*").eq("tournament_id", qualifier.tournament_id)) as PlayerRow[];
+  const attempts = take(await client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id).not("submitted_at", "is", null)) as QualifierAttemptRow[];
+  if (attempts.length !== players.length) return;
+  const fallbackSeed = new Map(players.map((player) => [player.id, player.seed ?? Infinity]));
+  const ranked = [...attempts].sort((left, right) => (left.distance_km as number) - (right.distance_km as number) || (fallbackSeed.get(left.player_id) ?? Infinity) - (fallbackSeed.get(right.player_id) ?? Infinity));
+  const claim = await client.from("qualifiers").update({ status: "complete", completed_at: new Date().toISOString() }).eq("id", qualifier.id).eq("status", "open").select("id").maybeSingle();
+  if (claim.error) take(claim);
+  if (!claim.data) return;
+  take(await client.from("players").update({ seed: null }).eq("tournament_id", qualifier.tournament_id));
+  for (let index = 0; index < ranked.length; index += 1) take(await client.from("players").update({ seed: index + 1 }).eq("id", ranked[index].player_id));
+  const tournament = one(await client.from("tournaments").select("*").eq("id", qualifier.tournament_id).single()) as TournamentRow;
+  await createRankingGroup(client, tournament, ranked.map((attempt) => attempt.player_id), 1);
+  take(await client.from("tournaments").update({ status: "tournament" }).eq("id", qualifier.tournament_id).eq("status", "qualifier"));
+  await audit(client, qualifier.tournament_id, "complete_qualifier", { earnedByePlayerIds: ranked.slice(0, openingRound(ranked).byes.length).map((attempt) => attempt.player_id) });
+}
+
+export async function submitQualifierGuess(identity: Identity | null, guess: { lat: number; lng: number }) {
+  if (!Number.isFinite(guess.lat) || guess.lat < -90 || guess.lat > 90 || !Number.isFinite(guess.lng) || guess.lng < -180 || guess.lng > 180) throw new HttpError(400, "That guess is not on Earth.");
+  const client = supabaseAdmin();
+  const player = await requirePlayer(client, identity);
+  const { qualifier, attempt } = await qualifierRows(client, player);
+  if (!attempt?.started_at || !attempt.expires_at) throw new HttpError(409, "Start the qualifier before guessing.");
+  if (new Date(attempt.expires_at).getTime() > Date.now() + 1000) throw new HttpError(409, "Finish viewing before submitting.");
+  const update = await client.from("qualifier_attempts").update({ guessed_lat: guess.lat, guessed_lng: guess.lng, distance_km: haversineKm({ lat: qualifier.actual_lat, lng: qualifier.actual_lng }, guess), submitted_at: new Date().toISOString() }).eq("id", attempt.id).is("submitted_at", null).select("id").maybeSingle();
+  if (update.error) take(update);
+  if (!update.data) throw new HttpError(409, "That qualifier guess is already locked.");
+  await finalizeQualifierIfReady(client, qualifier);
+  return getQualifierPlayState(identity);
 }
 
 async function playableMatch(client: SupabaseClient, matchId: string, player: PlayerRow) {
@@ -1073,6 +1322,7 @@ export async function getAdminState(): Promise<AdminState> {
       players: [],
       matches: [],
       draftSelections: [],
+      qualifierSubmittedPlayerIds: [],
       locations: locations.map(asLocationCandidate),
       activeLocationCount: locations.filter((location) => location.active).length,
       requiredLocationCount: 0,
@@ -1082,8 +1332,17 @@ export async function getAdminState(): Promise<AdminState> {
 
   const core = await queryCoreState(client, tournament, null);
   const expectedMatchCount = rankingMatchCount(core.players.length);
-  const requiredLocationCount =
-    expectedMatchCount * (tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH);
+  const requiredLocationCount = locationsNeeded(
+    core.players.length,
+    tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH,
+  );
+  const qualifierResult = await client.from("qualifiers").select("id").eq("tournament_id", tournament.id).maybeSingle();
+  if (qualifierResult.error) take(qualifierResult);
+  let qualifierSubmittedPlayerIds: string[] = [];
+  if (qualifierResult.data) {
+    const submitted = take(await client.from("qualifier_attempts").select("player_id").eq("qualifier_id", (qualifierResult.data as { id: string }).id).not("submitted_at", "is", null)) as Array<{ player_id: string }>;
+    qualifierSubmittedPlayerIds = submitted.map((row) => row.player_id);
+  }
   return {
     tournament: asTournamentSummary(tournament, core.players.length),
     players: core.players.map(asPlayerSummary),
@@ -1097,6 +1356,7 @@ export async function getAdminState(): Promise<AdminState> {
       unlockedAt: draft.unlocked_at,
       selectedAt: draft.selected_at,
     })),
+    qualifierSubmittedPlayerIds,
     locations: locations.map(asLocationCandidate),
     activeLocationCount: locations.filter((location) => location.active).length,
     requiredLocationCount,
@@ -1106,11 +1366,18 @@ export async function getAdminState(): Promise<AdminState> {
 
 export async function seedLocationPool() {
   const client = supabaseAdmin();
-  const result = await client.from("locations").upsert(
-    WORLDWIDE_LOCATION_CANDIDATES.map((location) => ({ ...location, active: false })),
-    { onConflict: "lat,lng", ignoreDuplicates: true },
-  );
-  take(result);
+  // Validation moves a row's lat/lng onto the panorama Google actually returned, so the
+  // (lat, lng) unique index stops matching the seed it came from. Identity has to be the
+  // place name, or re-seeding duplicates every candidate already validated.
+  const existing = take(await client.from("locations").select("label,country")) as Array<{ label: string; country: string }>;
+  const known = new Set(existing.map((location) => `${location.label}|${location.country}`));
+  const fresh = WORLDWIDE_LOCATION_CANDIDATES.filter((location) => !known.has(`${location.label}|${location.country}`));
+  if (fresh.length) {
+    take(await client.from("locations").upsert(
+      fresh.map((location) => ({ ...location, active: false })),
+      { onConflict: "lat,lng", ignoreDuplicates: true },
+    ));
+  }
   return getAdminState();
 }
 
@@ -1200,6 +1467,16 @@ export async function resetAttempt(matchId: string, playerId: string) {
       .eq("id", matchId),
   );
   await audit(client, match.tournament_id, "reset_attempt", { matchId, playerId });
+  return getAdminState();
+}
+
+export async function resetQualifierAttempt(playerId: string) {
+  const client = supabaseAdmin();
+  const tournament = await latestTournament(client);
+  if (!tournament || tournament.status !== "qualifier") throw new HttpError(409, "The qualifier is not open.");
+  const qualifier = one(await client.from("qualifiers").select("id").eq("tournament_id", tournament.id).single()) as { id: string };
+  take(await client.from("qualifier_attempts").delete().eq("qualifier_id", qualifier.id).eq("player_id", playerId));
+  await audit(client, tournament.id, "reset_qualifier_attempt", { playerId });
   return getAdminState();
 }
 

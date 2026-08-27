@@ -8,12 +8,8 @@
 .yourTurn { background: repeating-linear-gradient(135deg, #ffea00 0 18px, #ff9b00 18px 36px); text-align: center; }
 .flash { margin: 0 0 12px; color: #fff; font-size: clamp(1.5rem, 7vw, 3rem); text-align: center; text-shadow: 3px 3px #000, -2px -2px #d60068; animation: flash .7s steps(2) infinite; }
 @keyframes flash { 50% { color: #d5ff00; transform: scale(1.02); } }
-.matches { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
-.match { padding: 10px; border: 3px ridge #7d2ad2; background: #fff; box-shadow: 3px 3px #251047; text-align: center; }
-.match p { margin: 8px 0; padding: 5px; border: 2px solid #32106f; background: #eee1ff; }
-.match small { font-family: "Courier New", monospace; font-weight: 900; }
-.winner { color: #084c00; background: #dfff8e !important; }
 .resultCard { margin: 9px 0; border: 3px outset #fff; background: #fff6ca; color: #18032d; text-shadow: none; }
+.resultCard > p { margin: 0; padding: 12px; }
 .resultCard summary { padding: 12px; cursor: pointer; font-size: 1.05rem; }
 .resultGrid { display: grid; gap: 7px; padding: 10px; border-top: 2px solid; }
 .resultGrid strong, .resultGrid span { display: block; }
@@ -24,9 +20,12 @@
 .draftBoard > b { padding: 6px; background: #301070; color: #fff; font-size: .75rem; }
 .draftRow { display: contents; }
 .draftRow > * { padding: 9px 6px; border-bottom: 2px solid #7d66a0; background: #fff; }
+.rankingBoard { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 8px; }
+.rankingBoard > div { display: grid; grid-template-columns: 48px 1fr; align-items: center; border: 3px outset #fff; background: #fff4a9; color: #1c0538; text-shadow: none; }
+.rankingBoard strong { padding: 9px; background: #e62b9c; color: #fff; text-align: center; text-shadow: 1px 1px #000; }
+.rankingBoard span { padding: 9px; }
 .finalBoard { background: linear-gradient(#2b086f, #ae1497); color: #fff; }
 .finalPick { display: grid; grid-template-columns: 100px 30px 1fr; margin: 5px auto; padding: 10px; border: 3px outset #fff; background: #fff5b5; color: #190630; text-shadow: none; }
-.footer { display: flex; justify-content: space-between; gap: 10px; padding: 18px 5px 30px; color: #fff; font-family: "Courier New", monospace; font-size: .8rem; font-weight: 900; text-shadow: 2px 2px #000; }
-.footer a { text-decoration: underline; }
+.footer { display: flex; justify-content: center; gap: 10px; padding: 18px 5px 30px; color: #fff; font-family: "Courier New", monospace; font-size: .8rem; font-weight: 900; text-align: center; text-shadow: 2px 2px #000; }
 @media (max-width: 540px) { .slotGrid { grid-template-columns: repeat(3, 1fr); } .draftBoard { grid-template-columns: 65px 1fr 110px; font-size: .84rem; } }
 @media (prefers-reduced-motion: reduce) { .flash { animation: none; } }

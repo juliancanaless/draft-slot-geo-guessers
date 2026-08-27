@@ -6,7 +6,9 @@
 .mapCanvas { position: absolute; inset: 0; background: #0b011c; }
 .loadingCurtain { position: absolute; inset: 0; display: grid; place-content: center; gap: 8px; padding: 20px; background: repeating-linear-gradient(45deg, #391080 0 20px, #6814ab 20px 40px); font-size: clamp(1.5rem, 8vw, 3.5rem); text-align: center; text-shadow: 3px 3px #000; }
 .loadingCurtain small, .loadingCurtain b { display: block; font-family: "Courier New", monospace; font-size: .8rem; }
-.timer { position: absolute; top: 12px; right: 12px; width: 68px; height: 68px; display: grid; place-content: center; border: 5px outset #fff; border-radius: 50%; background: #e90071; font-size: 2rem; text-shadow: 2px 2px #000; }
+.timer { position: absolute; z-index: 3; top: 10px; left: 50%; display: grid; grid-template-columns: auto auto auto; gap: 8px; align-items: baseline; min-width: 230px; padding: 7px 13px; border: 5px outset #fff; background: linear-gradient(#ff3aa8, #b80061); transform: translateX(-50%); font-family: "Courier New", monospace; text-align: center; text-shadow: 2px 2px #000; box-shadow: 4px 4px #08000f; }
+.timer span, .timer small { font-size: .72rem; font-weight: 900; }
+.timer strong { color: #f5ff38; font-size: 2.1rem; line-height: 1; }
 .guessButton { position: absolute; z-index: 2; right: 15px; bottom: max(15px, env(safe-area-inset-bottom)); left: 15px; width: calc(100% - 30px); }
 .guessPrompt { position: absolute; top: 12px; left: 50%; padding: 8px 12px; border: 3px outset #fff; background: #48128e; transform: translateX(-50%); text-align: center; text-shadow: 2px 2px #000; white-space: nowrap; }
 .centerCard { width: min(92%, 650px); margin: auto; color: #17032f; text-align: center; }

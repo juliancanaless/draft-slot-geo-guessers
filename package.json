@@ -18,6 +18,7 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/google.maps": "^3.66.0",
     "@types/node": "^20",
     "@types/react": "^19",

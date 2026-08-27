@@ -1,4 +1,4 @@
-export type TournamentStatus = "lobby" | "tournament" | "draft_selection" | "complete";
+export type TournamentStatus = "lobby" | "qualifier" | "tournament" | "draft_selection" | "complete";
 export type MatchStatus = "ready" | "in_progress" | "complete";
 
 export type PlayerSummary = {
@@ -29,6 +29,7 @@ export type MatchSummary = {
   groupRankEnd: number;
   phase: "play_in" | "knockout";
   roundNumber: number;
+  matchIndex: number;
   player1: PlayerSummary;
   player2: PlayerSummary;
   status: MatchStatus;
@@ -64,9 +65,30 @@ export type AppState = {
   players: PlayerSummary[];
   matches: MatchSummary[];
   draftSelections: DraftSelectionSummary[];
+  qualifier: QualifierSummary | null;
   me: PlayerSummary | null;
   serverNow: string;
   message?: string;
+};
+
+export type QualifierSummary = {
+  status: "open" | "complete";
+  submittedCount: number;
+  totalPlayers: number;
+  meSubmitted: boolean;
+  rankings: Array<{ playerId: string; playerName: string; seed: number; distanceKm: number }> | null;
+};
+
+export type QualifierPlayState = {
+  challenge: ChallengeState;
+  serverNow: string;
+  viewSeconds: number;
+  submittedCount: number;
+  totalPlayers: number;
+  results: {
+    actual: { lat: number; lng: number; label: string; country: string };
+    rankings: Array<{ playerId: string; playerName: string; seed: number; distanceKm: number }>;
+  } | null;
 };
 
 export type Identity = { playerId: string; token: string };
@@ -107,6 +129,7 @@ export type AdminState = {
   players: PlayerSummary[];
   matches: MatchSummary[];
   draftSelections: DraftSelectionSummary[];
+  qualifierSubmittedPlayerIds: string[];
   locations: LocationCandidate[];
   activeLocationCount: number;
   requiredLocationCount: number;

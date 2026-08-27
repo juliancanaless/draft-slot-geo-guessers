@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadGoogleMaps } from "@/lib/google-maps";
+import { rosterCapacity } from "@/lib/tournament";
 import type { AdminState, LocationCandidate } from "@/lib/types";
 import styles from "./AdminClient.module.css";
 
@@ -50,6 +51,12 @@ export default function AdminClient() {
     return () => window.clearTimeout(initial);
   }, [load]);
 
+  useEffect(() => {
+    if (!secret) return;
+    const timer = window.setInterval(() => void load(secret), 10_000);
+    return () => window.clearInterval(timer);
+  }, [load, secret]);
+
   async function action(body: Record<string, unknown>, confirmText?: string) {
     if (confirmText && !window.confirm(confirmText)) return null;
     setBusy(true);
@@ -83,20 +90,19 @@ export default function AdminClient() {
     setBusy(true);
     setError("");
     try {
-      if (!adminState.locations.length) {
-        await adminFetch(secret, { method: "POST", body: JSON.stringify({ action: "seed-locations" }), headers: { "Content-Type": "application/json" } });
-        const fresh = await adminFetch<AdminState>(secret);
-        setState(fresh);
-        adminState = fresh;
-      }
+      // Seeding is an ignore-duplicates upsert, so running it every time is how new
+      // candidates in the data file reach the pool.
+      await adminFetch(secret, { method: "POST", body: JSON.stringify({ action: "seed-locations" }), headers: { "Content-Type": "application/json" } });
+      const fresh = await adminFetch<AdminState>(secret);
+      setState(fresh);
+      adminState = fresh;
       const maps = await loadGoogleMaps();
       const service = new maps.StreetViewService();
       const pending = adminState.locations.filter((location) => !location.validatedAt);
-      const target = Math.min(adminState.locations.length, Math.max(adminState.requiredLocationCount + 8, 72));
       let active = adminState.activeLocationCount;
-      for (let index = 0; index < pending.length && active < target; index += 1) {
+      for (let index = 0; index < pending.length; index += 1) {
         const location = pending[index];
-        setProgress(`CHECKING ${index + 1}/${pending.length}: ${location.label}, ${location.country} — ${active}/${target} READY`);
+        setProgress(`CHECKING ${index + 1}/${pending.length}: ${location.label}, ${location.country} — ${active} READY`);
         try {
           const response = await service.getPanorama({
             location: { lat: location.lat, lng: location.lng },
@@ -166,19 +172,27 @@ export default function AdminClient() {
         </section>
       )}
 
+      {/* Outside the tournament gate on purpose — the vault has to be fillable before a
+          lobby exists, and toppable up mid-season. */}
+      <section className="panel">
+        <h2 className="panel-title">LOCATION VAULT</h2>
+        <p className="pixel-copy">{state.activeLocationCount} READY / {state.locations.length} CANDIDATES</p>
+        <div className="notice-box">Validating checks every candidate that has not been checked yet. {state.activeLocationCount} ready covers a season of up to {rosterCapacity(state.activeLocationCount, state.tournament?.locationsPerMatch ?? locationsPerMatch)} players.</div>
+        <div className="button-row"><button className="btn btn-blue" disabled={busy} onClick={() => void validateLocations()}>VALIDATE WORLDWIDE LOCATIONS</button></div>
+      </section>
+
       {state.tournament && (
         <>
           <section className="panel panel-purple">
             <h2 className="panel-title">TOURNAMENT STATE: {state.tournament.status}</h2>
             <p className="pixel-copy">{state.players.length} PLAYERS • {state.expectedMatchCount} TOTAL MATCHES • {state.requiredLocationCount} UNIQUE LOCATIONS NEEDED</p>
-            <p className="pixel-copy">LOCATION VAULT: {state.activeLocationCount} READY / {state.locations.length} CANDIDATES</p>
-            {state.tournament.status === "lobby" && <div className="button-row"><button className="btn btn-blue" disabled={busy} onClick={() => void validateLocations()}>VALIDATE WORLDWIDE LOCATIONS</button><button className="btn" disabled={busy || !allClaimed || state.activeLocationCount < state.requiredLocationCount} onClick={() => void action({ action: "start-tournament" }, "Randomize seeds and start? The bracket becomes real now.")}>START THE THUNDERDOME</button></div>}
+            {state.tournament.status === "lobby" && <><div className="notice-box">{!allClaimed ? `${state.players.filter((player) => player.claimed).length} / ${state.players.length} players claimed — everybody must claim before starting.` : state.activeLocationCount < state.requiredLocationCount ? `${state.activeLocationCount} / ${state.requiredLocationCount} locations ready — validate more before starting.` : `READY TO START: all ${state.players.length} players claimed and ${state.activeLocationCount} locations validated.`}</div><div className="button-row"><button className="btn" disabled={busy || !allClaimed || state.activeLocationCount < state.requiredLocationCount} onClick={() => void action({ action: "start-tournament" }, "Randomize seeds and start? The bracket becomes real now.")}>START THE THUNDERDOME</button></div></>}
             {state.tournament.status === "tournament" && state.matches.every((match) => match.status === "ready") && <div className="button-row"><button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "regenerate-bracket" }, "Nobody has started. Reroll the bracket and all assigned locations?")}>REROLL UNPLAYED BRACKET</button></div>}
           </section>
 
           <section className="panel">
             <h2 className="panel-title">ROSTER REPAIR SHOP</h2>
-            <div className={styles.adminList}>{state.players.map((player) => <div key={player.id}><span>{player.claimed ? "✓" : "○"} {player.name}{player.tournamentRank ? ` — RANK ${player.tournamentRank}` : ""}</span><button className="btn btn-danger" disabled={busy || !player.claimed} onClick={() => void action({ action: "reset-claim", playerId: player.id }, `Reset ${player.name}'s browser claim?`)}>RESET CLAIM</button></div>)}</div>
+            <div className={styles.adminList}>{state.players.map((player) => <div key={player.id}><span>{player.claimed ? "✓" : "○"} {player.name}{player.tournamentRank ? ` — RANK ${player.tournamentRank}` : ""}{state.qualifierSubmittedPlayerIds.includes(player.id) ? " — QUALIFIER LOCKED" : ""}</span><span className="button-row"><button className="btn btn-danger" disabled={busy || !player.claimed} onClick={() => void action({ action: "reset-claim", playerId: player.id }, `Reset ${player.name}'s browser claim?`)}>RESET CLAIM</button>{state.tournament?.status === "qualifier" && state.qualifierSubmittedPlayerIds.includes(player.id) && <button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "reset-qualifier-attempt", playerId: player.id }, `Delete ${player.name}'s qualifier guess so they can replay it?`)}>RESET QUALIFIER</button>}</span></div>)}</div>
           </section>
 
           {state.matches.length > 0 && <section className="panel"><h2 className="panel-title">MATCH EMERGENCY LEVERS</h2><div className={styles.adminList}>{state.matches.map((match) => <div key={match.id}><span>{match.player1.name} VS {match.player2.name} — {match.status}</span><span className="button-row"><button className="btn btn-danger" disabled={busy || match.status === "complete"} onClick={() => void action({ action: "reset-attempt", matchId: match.id, playerId: match.player1.id }, `Reset ${match.player1.name}'s whole attempt in this match?`)}>RESET {match.player1.name}</button><button className="btn btn-danger" disabled={busy || match.status === "complete"} onClick={() => void action({ action: "reset-attempt", matchId: match.id, playerId: match.player2.id }, `Reset ${match.player2.name}'s whole attempt in this match?`)}>RESET {match.player2.name}</button>{match.status !== "complete" && [match.player1, match.player2].map((player) => <button className="btn btn-blue" key={player.id} disabled={busy} onClick={() => void action({ action: "override-winner", matchId: match.id, winnerId: player.id }, `Force ${player.name} to win?`)}>FORCE {player.name}</button>)}</span></div>)}</div></section>}
