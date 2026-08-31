@@ -61,3 +61,23 @@ test("roster capacity is the largest roster the validated pool can start", () =>
   assert.equal(rosterCapacity(locationsNeeded(12, 3) - 1, 3), 11);
   assert.equal(rosterCapacity(0, 3), 1);
 });
+
+test("bye-only knockout pairings are settled before the play-in resolves", () => {
+  for (const size of [5, 6, 7, 9, 10, 12, 13]) {
+    const plan = openingRound(Array.from({ length: size }, (_, index) => index + 1));
+    if (plan.phase !== "play_in") continue;
+    const early = pairHighLow<number | null>([...plan.byes, ...plan.pairings.map(() => null)]);
+    const settled = early.filter(([first, second]) => first !== null && second !== null);
+    // Past half the bracket the play-in winners start facing each other, so nothing is settled.
+    assert.equal(settled.length, Math.max(0, plan.targetSize / 2 - plan.pairings.length));
+
+    for (let outcome = 0; outcome < 2 ** plan.pairings.length; outcome += 1) {
+      const winners = plan.pairings.map((pairing, index) => pairing[(outcome >> index) & 1]);
+      const survivors = [...plan.byes, ...winners].sort((left, right) => left - right);
+      const resolved = pairHighLow(survivors);
+      early.forEach(([first, second], index) => {
+        if (first !== null && second !== null) assert.deepEqual(resolved[index], [first, second]);
+      });
+    }
+  }
+});

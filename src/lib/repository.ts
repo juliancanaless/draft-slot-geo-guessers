@@ -669,7 +669,44 @@ async function createRankingGroup(
   for (let index = 0; index < plan.pairings.length; index += 1) {
     await createMatch(client, tournament, group.id, plan.phase, 0, index, plan.pairings[index]);
   }
+  if (plan.phase === "play_in") {
+    await createKnockoutRound(client, tournament, group.id, [
+      ...plan.byes,
+      ...Array<null>(plan.pairings.length).fill(null),
+    ]);
+  }
   return group.id;
+}
+
+/**
+ * Byes outrank every play-in entrant, so they always take the top knockout slots and the
+ * winners land in the holes below them. A pairing of two byes is therefore already decided
+ * before the play-in resolves, and holding it back buys nothing. Pass a null for a slot whose
+ * occupant is still unknown; the pairings it touches are created on the later call instead.
+ */
+async function createKnockoutRound(
+  client: SupabaseClient,
+  tournament: TournamentRow,
+  groupId: string,
+  slots: Array<string | null>,
+) {
+  const existing = new Set(
+    (take(
+      await client
+        .from("matches")
+        .select("match_index")
+        .eq("group_id", groupId)
+        .eq("phase", "knockout")
+        .eq("round_number", 0),
+    ) as Array<{ match_index: number }>).map((match) => match.match_index),
+  );
+  const pairings = pairHighLow(slots);
+  for (let index = 0; index < pairings.length; index += 1) {
+    const [first, second] = pairings[index];
+    if (first && second && !existing.has(index)) {
+      await createMatch(client, tournament, groupId, "knockout", 0, index, [first, second]);
+    }
+  }
 }
 
 export async function startTournament() {
@@ -831,10 +868,7 @@ async function advanceGroup(client: SupabaseClient, groupId: string) {
       );
     }
     const survivors = await sortedEntrantsBySeed(client, [...group.waiting_player_ids, ...winners]);
-    const pairings = pairHighLow(survivors);
-    for (let index = 0; index < pairings.length; index += 1) {
-      await createMatch(client, tournament, group.id, "knockout", 0, index, pairings[index]);
-    }
+    await createKnockoutRound(client, tournament, group.id, survivors);
     take(
       await client
         .from("ranking_groups")
