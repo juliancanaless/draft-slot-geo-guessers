@@ -1,5 +1,11 @@
 const EARTH_RADIUS_KM = 6371.0088;
 
+/**
+ * Stand-in distance for a player the admin forfeited. Antipodal points are the furthest any
+ * real guess can land, so anything past that ceiling always sorts behind everyone who played.
+ */
+export const FORFEIT_DISTANCE_KM = 40075;
+
 function radians(degrees: number) { return (degrees * Math.PI) / 180; }
 
 export function haversineKm(actual: { lat: number; lng: number }, guess: { lat: number; lng: number }) {

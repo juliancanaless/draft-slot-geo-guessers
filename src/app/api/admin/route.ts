@@ -7,6 +7,7 @@ import {
   overrideMatchWinner,
   regenerateBracket,
   resetAttempt,
+  forfeitPlayer,
   resetPlayerClaim,
   resetLocationValidation,
   resetQualifierAttempt,
@@ -73,6 +74,9 @@ export async function POST(request: Request) {
     if (action === "regenerate-bracket") return Response.json(await regenerateBracket());
     if (action === "reset-claim") {
       return Response.json(await resetPlayerClaim(requiredString(body, "playerId")));
+    }
+    if (action === "forfeit-player") {
+      return Response.json(await forfeitPlayer(requiredString(body, "playerId")));
     }
     if (action === "reset-attempt") {
       return Response.json(

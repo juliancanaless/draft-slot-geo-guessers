@@ -291,7 +291,7 @@ export default function HomeApp() {
 function QualifierResults({ state }: { state: AppState }) {
   if (!state.qualifier?.rankings) return null;
   const byes = byeCount(state.players.length);
-  return <section className="panel panel-purple"><h2 className="panel-title">BYE-WEEK BLOODBATH RESULTS</h2><div className={styles.rankingBoard}>{state.qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{result.seed}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.distanceKm.toFixed(1)} KM {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div></section>;
+  return <section className="panel panel-purple"><h2 className="panel-title">BYE-WEEK BLOODBATH RESULTS</h2><div className={styles.rankingBoard}>{state.qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{result.seed}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.forfeited ? "NO SHOW" : `${result.distanceKm.toFixed(1)} KM`} {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div></section>;
 }
 
 // Groups shrink as a player descends the bracket, so the smallest group a player

@@ -71,12 +71,21 @@ export type AppState = {
   message?: string;
 };
 
+export type QualifierRanking = {
+  playerId: string;
+  playerName: string;
+  seed: number;
+  distanceKm: number;
+  /** Admin marked them a no-show, so the distance is a placeholder that sorts last. */
+  forfeited: boolean;
+};
+
 export type QualifierSummary = {
   status: "open" | "complete";
   submittedCount: number;
   totalPlayers: number;
   meSubmitted: boolean;
-  rankings: Array<{ playerId: string; playerName: string; seed: number; distanceKm: number }> | null;
+  rankings: QualifierRanking[] | null;
 };
 
 export type QualifierPlayState = {
@@ -87,7 +96,7 @@ export type QualifierPlayState = {
   totalPlayers: number;
   results: {
     actual: { lat: number; lng: number; label: string; country: string };
-    rankings: Array<{ playerId: string; playerName: string; seed: number; distanceKm: number }>;
+    rankings: QualifierRanking[];
   } | null;
 };
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareDistanceCards, haversineKm } from "../src/lib/scoring";
+import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm } from "../src/lib/scoring";
 import { byeCount, highestPowerOfTwoAtMost, locationsNeeded, openingRound, pairHighLow, rankingMatchCount, rosterCapacity } from "../src/lib/tournament";
 
 test("haversine produces a realistic London to Paris distance", () => {
@@ -80,4 +80,14 @@ test("bye-only knockout pairings are settled before the play-in resolves", () =>
       });
     }
   }
+});
+
+test("a forfeit always sorts behind the worst real guess", () => {
+  const antipodes = [
+    haversineKm({ lat: 0, lng: 0 }, { lat: 0, lng: 180 }),
+    haversineKm({ lat: 90, lng: 0 }, { lat: -90, lng: 0 }),
+    haversineKm({ lat: 41.9, lng: 12.5 }, { lat: -41.9, lng: -167.5 }),
+  ];
+  for (const distance of antipodes) assert.ok(distance < FORFEIT_DISTANCE_KM);
+  assert.ok(Math.max(...antipodes) > 20000);
 });

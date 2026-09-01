@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { WORLDWIDE_LOCATION_CANDIDATES } from "@/data/location-candidates";
 import { createClaimToken, hashToken } from "./auth";
 import { HttpError } from "./http";
-import { compareDistanceCards, haversineKm } from "./scoring";
+import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm } from "./scoring";
 import { hasSupabase, supabaseAdmin } from "./supabase";
 import { highestPowerOfTwoAtMost, locationsNeeded, openingRound, pairHighLow, rankingMatchCount, shuffled } from "./tournament";
 import type {
@@ -18,6 +18,7 @@ import type {
   PlayState,
   PlayerSummary,
   QualifierPlayState,
+  QualifierRanking,
   QualifierSummary,
   TournamentSummary,
 } from "./types";
@@ -359,6 +360,17 @@ function buildMatchSummaries(input: {
   });
 }
 
+/** A submitted attempt with no coordinates can only have come from an admin forfeit. */
+function asQualifierRanking(playerMap: Map<string, PlayerRow>) {
+  return (attempt: QualifierAttemptRow): QualifierRanking => ({
+    playerId: attempt.player_id,
+    playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
+    seed: playerMap.get(attempt.player_id)?.seed ?? 0,
+    distanceKm: attempt.distance_km as number,
+    forfeited: attempt.guessed_lat === null,
+  });
+}
+
 async function qualifierSummary(
   client: SupabaseClient,
   tournamentId: string,
@@ -381,12 +393,7 @@ async function qualifierSummary(
   const rankings = qualifier.status === "complete"
     ? submitted
       .sort((left, right) => (left.distance_km ?? Infinity) - (right.distance_km ?? Infinity))
-      .map((attempt) => ({
-        playerId: attempt.player_id,
-        playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
-        seed: playerMap.get(attempt.player_id)?.seed ?? 0,
-        distanceKm: attempt.distance_km as number,
-      }))
+      .map(asQualifierRanking(playerMap))
       .sort((left, right) => left.seed - right.seed)
     : null;
   return {
@@ -1040,7 +1047,7 @@ export async function getQualifierPlayState(identity: Identity | null): Promise<
       actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
       rankings: attempts
         .filter((item) => item.submitted_at)
-        .map((item) => ({ playerId: item.player_id, playerName: playerMap.get(item.player_id)?.name ?? "Unknown Bozo", seed: playerMap.get(item.player_id)?.seed ?? 0, distanceKm: item.distance_km as number }))
+        .map(asQualifierRanking(playerMap))
         .sort((left, right) => left.seed - right.seed),
     };
   }
@@ -1463,6 +1470,61 @@ export async function saveLocationValidation(input: {
     );
   }
   return { ok: true };
+}
+
+/**
+ * One admin gesture for "this player is not playing", resolved against whatever the tournament
+ * is currently waiting on. In the qualifier that means a no-show submission that sorts behind
+ * every real guess; in a bracket round it means a walkover for their opponent.
+ */
+export async function forfeitPlayer(playerId: string) {
+  const client = supabaseAdmin();
+  const player = one(
+    await client.from("players").select("*").eq("id", playerId).single(),
+    "That player does not exist.",
+  ) as PlayerRow;
+  const tournament = await latestTournament(client);
+  if (!tournament || tournament.id !== player.tournament_id) {
+    throw new HttpError(409, "That player is not in the current tournament.");
+  }
+
+  if (tournament.status === "qualifier") {
+    const { qualifier, attempt } = await qualifierRows(client, player);
+    if (qualifier.status === "complete") throw new HttpError(409, "The qualifier already finished.");
+    if (attempt?.submitted_at) throw new HttpError(409, `${player.name} already submitted a guess.`);
+    const forfeit = {
+      guessed_lat: null,
+      guessed_lng: null,
+      distance_km: FORFEIT_DISTANCE_KM,
+      submitted_at: new Date().toISOString(),
+    };
+    take(attempt
+      ? await client.from("qualifier_attempts").update(forfeit).eq("id", attempt.id).is("submitted_at", null)
+      : await client.from("qualifier_attempts").insert({ qualifier_id: qualifier.id, player_id: player.id, ...forfeit }));
+    await audit(client, tournament.id, "forfeit_qualifier", { playerId, name: player.name });
+    await finalizeQualifierIfReady(client, qualifier);
+    return getAdminState();
+  }
+
+  if (tournament.status !== "tournament") {
+    throw new HttpError(409, "There is nothing for that player to forfeit right now.");
+  }
+
+  const live = take(
+    await client
+      .from("matches")
+      .select("*")
+      .eq("tournament_id", tournament.id)
+      .neq("status", "complete"),
+  ) as MatchRow[];
+  const pending = live.filter((match) => match.player_1_id === playerId || match.player_2_id === playerId);
+  if (!pending.length) throw new HttpError(409, `${player.name} has no live matchup to forfeit.`);
+  if (pending.length > 1) {
+    throw new HttpError(409, `${player.name} is in ${pending.length} live matchups. Force a winner on each instead.`);
+  }
+  const match = pending[0];
+  await audit(client, tournament.id, "forfeit_match", { playerId, name: player.name, matchId: match.id });
+  return overrideMatchWinner(match.id, match.player_1_id === playerId ? match.player_2_id : match.player_1_id);
 }
 
 export async function resetPlayerClaim(playerId: string) {

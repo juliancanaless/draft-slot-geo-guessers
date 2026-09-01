@@ -139,6 +139,16 @@ export default function AdminClient() {
   }
 
   const allClaimed = useMemo(() => Boolean(state?.players.length && state.players.every((player) => player.claimed)), [state]);
+  // Who the tournament is currently waiting on, and therefore who forfeiting would unblock.
+  const forfeitable = useMemo(() => {
+    if (state?.tournament?.status === "qualifier") {
+      return new Set(state.players.map((player) => player.id).filter((id) => !state.qualifierSubmittedPlayerIds.includes(id)));
+    }
+    if (state?.tournament?.status === "tournament") {
+      return new Set(state.matches.filter((match) => match.status !== "complete").flatMap((match) => [match.player1.id, match.player2.id]));
+    }
+    return new Set<string>();
+  }, [state]);
 
   if (!state) {
     return (
@@ -192,7 +202,7 @@ export default function AdminClient() {
 
           <section className="panel">
             <h2 className="panel-title">ROSTER REPAIR SHOP</h2>
-            <div className={styles.adminList}>{state.players.map((player) => <div key={player.id}><span>{player.claimed ? "✓" : "○"} {player.name}{player.tournamentRank ? ` — RANK ${player.tournamentRank}` : ""}{state.qualifierSubmittedPlayerIds.includes(player.id) ? " — QUALIFIER LOCKED" : ""}</span><span className="button-row"><button className="btn btn-danger" disabled={busy || !player.claimed} onClick={() => void action({ action: "reset-claim", playerId: player.id }, `Reset ${player.name}'s browser claim?`)}>RESET CLAIM</button>{state.tournament?.status === "qualifier" && state.qualifierSubmittedPlayerIds.includes(player.id) && <button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "reset-qualifier-attempt", playerId: player.id }, `Delete ${player.name}'s qualifier guess so they can replay it?`)}>RESET QUALIFIER</button>}</span></div>)}</div>
+            <div className={styles.adminList}>{state.players.map((player) => <div key={player.id}><span>{player.claimed ? "✓" : "○"} {player.name}{player.tournamentRank ? ` — RANK ${player.tournamentRank}` : ""}{state.qualifierSubmittedPlayerIds.includes(player.id) ? " — QUALIFIER LOCKED" : ""}</span><span className="button-row"><button className="btn btn-danger" disabled={busy || !player.claimed} onClick={() => void action({ action: "reset-claim", playerId: player.id }, `Reset ${player.name}'s browser claim?`)}>RESET CLAIM</button>{forfeitable.has(player.id) && <button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "forfeit-player", playerId: player.id }, `Forfeit ${player.name}? In the qualifier they get placed last. In a match their opponent advances.`)}>FORFEIT</button>}{state.tournament?.status === "qualifier" && state.qualifierSubmittedPlayerIds.includes(player.id) && <button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "reset-qualifier-attempt", playerId: player.id }, `Delete ${player.name}'s qualifier guess so they can replay it?`)}>RESET QUALIFIER</button>}</span></div>)}</div>
           </section>
 
           {state.matches.length > 0 && <section className="panel"><h2 className="panel-title">MATCH EMERGENCY LEVERS</h2><div className={styles.adminList}>{state.matches.map((match) => <div key={match.id}><span>{match.player1.name} VS {match.player2.name} — {match.status}</span><span className="button-row"><button className="btn btn-danger" disabled={busy || match.status === "complete"} onClick={() => void action({ action: "reset-attempt", matchId: match.id, playerId: match.player1.id }, `Reset ${match.player1.name}'s whole attempt in this match?`)}>RESET {match.player1.name}</button><button className="btn btn-danger" disabled={busy || match.status === "complete"} onClick={() => void action({ action: "reset-attempt", matchId: match.id, playerId: match.player2.id }, `Reset ${match.player2.name}'s whole attempt in this match?`)}>RESET {match.player2.name}</button>{match.status !== "complete" && [match.player1, match.player2].map((player) => <button className="btn btn-blue" key={player.id} disabled={busy} onClick={() => void action({ action: "override-winner", matchId: match.id, winnerId: player.id }, `Force ${player.name} to win?`)}>FORCE {player.name}</button>)}</span></div>)}</div></section>}
