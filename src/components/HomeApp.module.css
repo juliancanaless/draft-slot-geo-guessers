@@ -11,9 +11,6 @@
 .resultCard { margin: 9px 0; border: 3px outset #fff; background: #fff6ca; color: #18032d; text-shadow: none; }
 .resultCard > p { margin: 0; padding: 12px; }
 .resultCard summary { padding: 12px; cursor: pointer; font-size: 1.05rem; }
-.resultGrid { display: grid; gap: 7px; padding: 10px; border-top: 2px solid; }
-.resultGrid strong, .resultGrid span { display: block; }
-.resultGrid span { font-family: "Courier New", monospace; font-weight: 900; }
 .finalScore { padding: 10px; background: #24035e; color: #fff; text-align: center; text-shadow: 2px 2px #000; }
 .slotGrid { display: grid; grid-template-columns: repeat(4, minmax(55px, 1fr)); gap: 12px; max-width: 560px; margin: 18px auto; }
 .draftBoard { display: grid; grid-template-columns: 90px 1fr minmax(120px, 1fr); gap: 5px; align-items: stretch; }

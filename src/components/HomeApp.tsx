@@ -6,6 +6,7 @@ import { apiFetch, readIdentity, saveIdentity } from "@/lib/client-api";
 import { byeCount } from "@/lib/tournament";
 import type { AppState, MatchSummary } from "@/lib/types";
 import BracketView from "./BracketView";
+import RevealMap from "./RevealMap";
 import styles from "./HomeApp.module.css";
 
 const MARQUEE = "★★★ NO CHEATING, LOSERS ★★★ WORLDWIDE GEOGRAPHICAL COMBAT ★★★";
@@ -35,6 +36,9 @@ function totalFor(match: MatchSummary, playerId: string) {
 }
 
 function ResultCard({ match }: { match: MatchSummary }) {
+  // A recap lists every finished match, so the maps wait for a click rather than
+  // instantiating one per location on load.
+  const [open, setOpen] = useState(false);
   if (!match.results) return null;
   const scored = match.results.every((result) => result.guesses.length === 2);
   const winner = match.winnerId === match.player1.id ? match.player1 : match.player2;
@@ -48,18 +52,11 @@ function ResultCard({ match }: { match: MatchSummary }) {
   const player1Total = totalFor(match, match.player1.id);
   const player2Total = totalFor(match, match.player2.id);
   return (
-    <details className={styles.resultCard}>
+    <details className={styles.resultCard} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary>🏆 {name(winner)} WON — VIEW THE COOKING</summary>
-      <div className={styles.resultGrid}>
-        {match.results.map((result) => (
-          <div key={result.sequence}>
-            <strong>LOCATION {result.sequence}: {result.actual.label}, {result.actual.country}</strong>
-            {result.guesses.map((guess) => (
-              <span key={guess.playerId}>{guess.playerName}: {guess.distanceKm.toFixed(1)} KM</span>
-            ))}
-          </div>
-        ))}
-      </div>
+      {open && match.results.map((result) => (
+        <RevealMap key={result.sequence} heading={`LOCATION ${result.sequence}`} reveal={result} />
+      ))}
       <p className={styles.finalScore}>
         {match.player1.name}: {player1Total.toFixed(1)} KM &nbsp; VS &nbsp;
         {match.player2.name}: {player2Total.toFixed(1)} KM
@@ -289,9 +286,18 @@ export default function HomeApp() {
 }
 
 function QualifierResults({ state }: { state: AppState }) {
-  if (!state.qualifier?.rankings) return null;
+  const [open, setOpen] = useState(false);
+  const qualifier = state.qualifier;
+  if (!qualifier?.rankings) return null;
   const byes = byeCount(state.players.length);
-  return <section className="panel panel-purple"><h2 className="panel-title">BYE-WEEK BLOODBATH RESULTS</h2><div className={styles.rankingBoard}>{state.qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{result.seed}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.forfeited ? "NO SHOW" : `${result.distanceKm.toFixed(1)} KM`} {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div></section>;
+  return <section className="panel panel-purple"><h2 className="panel-title">BYE-WEEK BLOODBATH RESULTS</h2><div className={styles.rankingBoard}>{qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{result.seed}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.forfeited ? "NO SHOW" : `${result.distanceKm.toFixed(1)} KM`} {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div>
+    {qualifier.reveal && (
+      <details className={styles.resultCard} onToggle={(event) => setOpen(event.currentTarget.open)}>
+        <summary>🌎 WHERE THE HELL WAS THAT?</summary>
+        {open && <RevealMap heading="THE QUALIFIER SPOT" reveal={qualifier.reveal} />}
+      </details>
+    )}
+  </section>;
 }
 
 // Groups shrink as a player descends the bracket, so the smallest group a player

@@ -1,0 +1,7 @@
+.reveal { display: grid; gap: 8px; padding: 10px; border-top: 2px solid; }
+.heading { font-size: .95rem; }
+.canvas { height: clamp(220px, 45vw, 380px); border: 3px inset #fff; background: #0b011c; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 5px; margin: 0; padding: 0; list-style: none; font-family: "Courier New", monospace; font-size: .8rem; font-weight: 900; }
+.legend li { padding: 6px 8px; border: 2px outset #fff; background: #fff; color: #18032d; }
+.legend b { display: inline-block; min-width: 20px; margin-right: 4px; padding: 1px 5px; background: #e62b9c; color: #fff; text-align: center; }
+.truth { grid-column: 1 / -1; background: #f5ff38 !important; }

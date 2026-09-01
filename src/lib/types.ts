@@ -10,8 +10,13 @@ export type PlayerSummary = {
   tournamentRank: number | null;
 };
 
-export type MatchResult = {
-  sequence: number;
+/**
+ * Where a location actually was plus everyone's pin, published only once nothing can be
+ * cheated with it. A location is unique per tournament (`challenges` has a unique constraint
+ * on it and the qualifier's is excluded from match draws), so a revealed one never comes back.
+ * Forfeits have no coordinates and are simply absent here.
+ */
+export type Reveal = {
   actual: { lat: number; lng: number; label: string; country: string };
   guesses: Array<{
     playerId: string;
@@ -21,6 +26,8 @@ export type MatchResult = {
     distanceKm: number;
   }>;
 };
+
+export type MatchResult = Reveal & { sequence: number };
 
 export type MatchSummary = {
   id: string;
@@ -86,6 +93,7 @@ export type QualifierSummary = {
   totalPlayers: number;
   meSubmitted: boolean;
   rankings: QualifierRanking[] | null;
+  reveal: Reveal | null;
 };
 
 export type QualifierPlayState = {
@@ -95,7 +103,7 @@ export type QualifierPlayState = {
   submittedCount: number;
   totalPlayers: number;
   results: {
-    actual: { lat: number; lng: number; label: string; country: string };
+    actual: Reveal["actual"];
     rankings: QualifierRanking[];
   } | null;
 };

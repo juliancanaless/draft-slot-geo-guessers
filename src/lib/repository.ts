@@ -396,12 +396,28 @@ async function qualifierSummary(
       .map(asQualifierRanking(playerMap))
       .sort((left, right) => left.seed - right.seed)
     : null;
+  const reveal = qualifier.status === "complete"
+    ? {
+      actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
+      guesses: submitted
+        .filter((attempt) => attempt.guessed_lat !== null && attempt.guessed_lng !== null)
+        .map((attempt) => ({
+          playerId: attempt.player_id,
+          playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
+          lat: attempt.guessed_lat as number,
+          lng: attempt.guessed_lng as number,
+          distanceKm: attempt.distance_km as number,
+        }))
+        .sort((left, right) => left.distanceKm - right.distanceKm),
+    }
+    : null;
   return {
     status: qualifier.status,
     submittedCount: submitted.length,
     totalPlayers: players.length,
     meSubmitted: Boolean(me && submitted.some((attempt) => attempt.player_id === me.id)),
     rankings,
+    reveal,
   };
 }
 
