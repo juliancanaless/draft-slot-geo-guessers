@@ -35,6 +35,16 @@ function totalFor(match: MatchSummary, playerId: string) {
   }, 0) ?? 0;
 }
 
+function ResultsVault({ matches }: { matches: MatchSummary[] }) {
+  if (!matches.length) return null;
+  return (
+    <section className="panel panel-purple">
+      <h2 className="panel-title">RESULTS VAULT</h2>
+      {matches.map((match) => <ResultCard match={match} key={match.id} />)}
+    </section>
+  );
+}
+
 function ResultCard({ match }: { match: MatchSummary }) {
   // A recap lists every finished match, so the maps wait for a click rather than
   // instantiating one per location on load.
@@ -236,12 +246,7 @@ export default function HomeApp() {
             <WaitingRoom state={state} rosterSize={tournament.rosterSize} activeMatch={activeMatch} />
           )}
           <BracketView matches={state.matches} rosterSize={tournament.rosterSize} />
-          {completedMatches.length > 0 && (
-            <section className="panel panel-purple">
-              <h2 className="panel-title">RESULTS VAULT</h2>
-              {completedMatches.map((match) => <ResultCard match={match} key={match.id} />)}
-            </section>
-          )}
+          <ResultsVault matches={completedMatches} />
         </>
       ) : tournament.status === "draft_selection" ? (
         <>
@@ -268,6 +273,7 @@ export default function HomeApp() {
           <QualifierResults state={state} />
           <RankingBoard state={state} />
           <BracketView matches={state.matches} rosterSize={tournament.rosterSize} recap />
+          <ResultsVault matches={completedMatches} />
         </>
       ) : (
         <>
@@ -275,6 +281,7 @@ export default function HomeApp() {
           <QualifierResults state={state} />
           <RankingBoard state={state} />
           <BracketView matches={state.matches} rosterSize={tournament.rosterSize} recap />
+          <ResultsVault matches={completedMatches} />
         </>
       )}
 
