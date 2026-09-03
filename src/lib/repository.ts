@@ -682,6 +682,22 @@ async function activeLocations(client: SupabaseClient) {
   ) as LocationRow[];
 }
 
+/**
+ * Every location anyone has ever been shown, across every league. Players carry over between
+ * leagues, so a spot one league burned is no longer blind and must never be drawn again.
+ */
+async function playedLocationIds(client: SupabaseClient) {
+  const challenges = take(await client.from("challenges").select("location_id")) as Array<{ location_id: string }>;
+  const qualifiers = take(await client.from("qualifiers").select("location_id")) as Array<{ location_id: string }>;
+  return new Set([...challenges, ...qualifiers].map((row) => row.location_id));
+}
+
+/** The only pool a draw may pull from: validated, still active, and blind to everybody. */
+async function unplayedLocations(client: SupabaseClient) {
+  const played = await playedLocationIds(client);
+  return (await activeLocations(client)).filter((location) => !played.has(location.id));
+}
+
 async function createMatch(
   client: SupabaseClient,
   tournament: TournamentRow,
@@ -718,21 +734,11 @@ async function createMatch(
       .single(),
   ) as { id: string };
 
-  const usedResult = await client
-    .from("challenges")
-    .select("location_id")
-    .eq("tournament_id", tournament.id);
-  const used = new Set((take(usedResult) as Array<{ location_id: string }>).map((row) => row.location_id));
-  const qualifierResult = await client
-    .from("qualifiers")
-    .select("location_id")
-    .eq("tournament_id", tournament.id);
-  for (const row of take(qualifierResult) as Array<{ location_id: string }>) used.add(row.location_id);
   const challengeCount = tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH;
-  const available = shuffled((await activeLocations(client)).filter((location) => !used.has(location.id)));
+  const available = shuffled(await unplayedLocations(client));
   if (available.length < challengeCount) {
     await client.from("matches").delete().eq("id", match.id);
-    throw new HttpError(409, "Not enough validated worldwide locations remain.");
+    throw new HttpError(409, "Not enough unplayed worldwide locations remain.");
   }
 
   const challengeRows = available.slice(0, challengeCount).map((location, index) => ({
@@ -862,11 +868,11 @@ export async function startTournament() {
   const requiredLocations = format === "sprint"
     ? qualifierRounds
     : locationsNeeded(players.length, tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH);
-  const validatedLocations = await activeLocations(client);
+  const validatedLocations = await unplayedLocations(client);
   if (validatedLocations.length < requiredLocations) {
     throw new HttpError(
       409,
-      `Validate ${requiredLocations} locations first. Only ${validatedLocations.length} are ready.`,
+      `Validate ${requiredLocations} unplayed locations first. Only ${validatedLocations.length} are ready.`,
     );
   }
 
@@ -1507,6 +1513,9 @@ export async function getAdminState(): Promise<AdminState> {
   const locations = take(
     await client.from("locations").select("*").order("region").order("country").order("label"),
   ) as LocationRow[];
+  // "Ready" means drawable, so a location a past league already burned no longer counts.
+  const played = await playedLocationIds(client);
+  const activeLocationCount = locations.filter((location) => location.active && !played.has(location.id)).length;
   if (!tournament) {
     return {
       tournament: null,
@@ -1515,7 +1524,7 @@ export async function getAdminState(): Promise<AdminState> {
       draftSelections: [],
       qualifierSubmittedPlayerIds: [],
       locations: locations.map(asLocationCandidate),
-      activeLocationCount: locations.filter((location) => location.active).length,
+      activeLocationCount,
       requiredLocationCount: 0,
       expectedMatchCount: 0,
     };
@@ -1550,7 +1559,7 @@ export async function getAdminState(): Promise<AdminState> {
     })),
     qualifierSubmittedPlayerIds,
     locations: locations.map(asLocationCandidate),
-    activeLocationCount: locations.filter((location) => location.active).length,
+    activeLocationCount,
     requiredLocationCount,
     expectedMatchCount,
   };
