@@ -35,7 +35,7 @@ function totalFor(match: MatchSummary, playerId: string) {
   }, 0) ?? 0;
 }
 
-function ResultsVault({ matches }: { matches: MatchSummary[] }) {
+export function ResultsVault({ matches }: { matches: MatchSummary[] }) {
   if (!matches.length) return null;
   return (
     <section className="panel panel-purple">
@@ -161,6 +161,8 @@ export default function HomeApp() {
     ? state.draftSelections.find((selection) => selection.playerId === state.me?.id)
     : null;
   const availablePlayers = state.players.filter((player) => !player.claimed);
+  // A sprint opens the door on start, so people arriving late claim a team and walk straight in.
+  const sprintOpen = tournament?.format === "sprint" && tournament.status === "qualifier";
 
   return (
     <main className="page-shell">
@@ -174,10 +176,10 @@ export default function HomeApp() {
       {error && <div className="error-box" role="alert">🚨 {error}</div>}
       {!loading && tournament && tournament.status !== "lobby" && !state.me && (
         <section className="panel panel-purple">
-          <h2 className="panel-title">THIS BROWSER HAS NO WARRIOR</h2>
+          <h2 className="panel-title">{sprintOpen ? "CLAIM YOUR TEAM" : "THIS BROWSER HAS NO WARRIOR"}</h2>
           {availablePlayers.length ? (
             <>
-              <p className="pixel-copy">Pick the name the commissioner reset for you.</p>
+              <p className="pixel-copy">{sprintOpen ? "Grab your name and you are straight into round one. No waiting on anybody." : "Pick the name the commissioner reset for you."}</p>
               <div className={styles.roster}>
                 {availablePlayers.map((player) => (
                   <button className={styles.playerButton} disabled={busy} key={player.id} onClick={() => void claim(player.id, player.name)}>
@@ -220,16 +222,18 @@ export default function HomeApp() {
             </div>
           </section>
           <section className="panel pixel-copy">
-            <strong>HOW THIS NONSENSE WORKS:</strong> You will play asynchronous worldwide geography matchups. The final ranking decides who chooses a fantasy draft slot first. It does not assign Pick #1 automatically.
+            <strong>HOW THIS NONSENSE WORKS:</strong> {tournament.format === "sprint"
+              ? `Everybody plays the same ${tournament.qualifierRounds} worldwide locations whenever they show up. Your distances add up, and the lowest total picks a fantasy draft slot first.`
+              : "You will play asynchronous worldwide geography matchups. The final ranking decides who chooses a fantasy draft slot first."} It does not assign Pick #1 automatically.
           </section>
         </>
       ) : tournament.status === "qualifier" ? (
         <>
           <section className={`${styles.yourTurn} panel`}>
-            <div className={styles.flash}>🌍 THE BYE-WEEK BLOODBATH 🌍</div>
-            <h2>ONE LOCATION. TOP PLAYERS EARN THE BYES.</h2>
+            <div className={styles.flash}>{sprintOpen ? "🌍 THE SPRINT IS LIVE 🌍" : "🌍 THE BYE-WEEK BLOODBATH 🌍"}</div>
+            <h2>{sprintOpen ? `${tournament.qualifierRounds} LOCATIONS. LOWEST TOTAL DRAFTS FIRST.` : "ONE LOCATION. TOP PLAYERS EARN THE BYES."}</h2>
             <p className="pixel-copy">{state.qualifier?.submittedCount ?? 0} / {state.qualifier?.totalPlayers ?? state.players.length} FINISHED</p>
-            {state.me ? state.qualifier?.meSubmitted ? <p className="pixel-copy">YOUR GUESS IS LOCKED. SCORES STAY HIDDEN UNTIL EVERY BOZO FINISHES.</p> : <Link className="btn" href="/qualifier">PLAY THE QUALIFIER</Link> : <p className="pixel-copy">CLAIM YOUR RESET NAME ABOVE BEFORE PLAYING.</p>}
+            {state.me ? state.qualifier?.meSubmitted ? <p className="pixel-copy">YOUR CARD IS LOCKED. SCORES STAY HIDDEN UNTIL EVERY BOZO FINISHES, THEN THE DRAFT OPENS.</p> : <Link className="btn" href="/qualifier">{sprintOpen ? "PLAY YOUR ROUNDS" : "PLAY THE QUALIFIER"}</Link> : <p className="pixel-copy">CLAIM YOUR NAME ABOVE BEFORE PLAYING.</p>}
           </section>
         </>
       ) : tournament.status === "tournament" ? (
@@ -287,21 +291,31 @@ export default function HomeApp() {
 
       <footer className={styles.footer}>
         <span>🌎 {tournament?.viewSeconds ?? 60} SECOND NO-MOVE MAYHEM</span>
+        <Link href="/archive">📼 PAST LEAGUES</Link>
       </footer>
     </main>
   );
 }
 
-function QualifierResults({ state }: { state: AppState }) {
+export function QualifierResults({ state }: { state: AppState }) {
   const [open, setOpen] = useState(false);
   const qualifier = state.qualifier;
   if (!qualifier?.rankings) return null;
-  const byes = byeCount(state.players.length);
-  return <section className="panel panel-purple"><h2 className="panel-title">BYE-WEEK BLOODBATH RESULTS</h2><div className={styles.rankingBoard}>{qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{result.seed}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.forfeited ? "NO SHOW" : `${result.distanceKm.toFixed(1)} KM`} {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div>
-    {qualifier.reveal && (
+  // A sprint's shared rounds are the whole league, so there are no byes to hand out and the
+  // standings on this panel are the final ranking.
+  const sprint = state.tournament?.format === "sprint";
+  const byes = sprint ? 0 : byeCount(state.players.length);
+  return <section className="panel panel-purple"><h2 className="panel-title">{sprint ? "FINAL STANDINGS" : "BYE-WEEK BLOODBATH RESULTS"}</h2><div className={styles.rankingBoard}>{qualifier.rankings.map((result, index) => <div key={result.playerId}><strong>#{index + 1}</strong><span>{index < byes ? "🎟️ " : ""}{result.playerName} — {result.forfeited ? "NO SHOW" : `${result.distanceKm.toFixed(1)} KM`} {index < byes ? "• BYE EARNED" : ""}</span></div>)}</div>
+    {qualifier.reveals && (
       <details className={styles.resultCard} onToggle={(event) => setOpen(event.currentTarget.open)}>
         <summary>🌎 WHERE THE HELL WAS THAT?</summary>
-        {open && <RevealMap heading="THE QUALIFIER SPOT" reveal={qualifier.reveal} />}
+        {open && qualifier.reveals.map((reveal) => (
+          <RevealMap
+            key={reveal.sequence}
+            heading={qualifier.roundsTotal > 1 ? `LOCATION ${reveal.sequence}` : "THE QUALIFIER SPOT"}
+            reveal={reveal}
+          />
+        ))}
       </details>
     )}
   </section>;
@@ -409,7 +423,7 @@ function ordinal(value: number) {
   return `${value}${["th", "st", "nd", "rd"][value % 10] ?? "th"}`;
 }
 
-function RankingBoard({ state }: { state: AppState }) {
+export function RankingBoard({ state }: { state: AppState }) {
   const ranked = [...state.players]
     .filter((player) => player.tournamentRank !== null)
     .sort((left, right) => (left.tournamentRank ?? 99) - (right.tournamentRank ?? 99));
@@ -443,7 +457,7 @@ function DraftBoard({ state }: { state: AppState }) {
   );
 }
 
-function FinalBoard({ state }: { state: AppState }) {
+export function FinalBoard({ state }: { state: AppState }) {
   const selections = [...state.draftSelections].sort((left, right) => (left.draftSlot ?? 99) - (right.draftSlot ?? 99));
   return (
     <section className={`${styles.finalBoard} panel`}>

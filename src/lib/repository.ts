@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { WORLDWIDE_LOCATION_CANDIDATES } from "@/data/location-candidates";
 import { createClaimToken, hashToken } from "./auth";
 import { HttpError } from "./http";
-import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm } from "./scoring";
+import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm, rankByTotalDistance } from "./scoring";
 import { hasSupabase, supabaseAdmin } from "./supabase";
 import { highestPowerOfTwoAtMost, locationsNeeded, openingRound, pairHighLow, rankingMatchCount, shuffled } from "./tournament";
 import type {
@@ -13,13 +13,14 @@ import type {
   DraftSelectionSummary,
   Identity,
   LocationCandidate,
-  MatchResult,
   MatchSummary,
   PlayState,
   PlayerSummary,
   QualifierPlayState,
   QualifierRanking,
   QualifierSummary,
+  RoundResult,
+  TournamentFormat,
   TournamentSummary,
 } from "./types";
 
@@ -27,7 +28,12 @@ type TournamentRow = {
   id: string;
   title: string;
   status: "lobby" | "qualifier" | "tournament" | "draft_selection" | "complete";
-  settings: { viewSeconds?: number; locationsPerMatch?: number };
+  settings: {
+    viewSeconds?: number;
+    locationsPerMatch?: number;
+    format?: TournamentFormat;
+    qualifierRounds?: number;
+  };
   current_selector_rank: number | null;
   created_at: string;
 };
@@ -126,6 +132,7 @@ type DraftRow = {
 type QualifierRow = {
   id: string;
   tournament_id: string;
+  sequence: number;
   location_id: string;
   pano_id: string;
   actual_lat: number;
@@ -154,6 +161,17 @@ type ResultLike<T> = { data: T | null; error: { message: string; code?: string }
 
 const DEFAULT_VIEW_SECONDS = 60;
 const DEFAULT_LOCATIONS_PER_MATCH = 3;
+const DEFAULT_SPRINT_ROUNDS = 3;
+
+/** A bracket has exactly one shared round, the bye qualifier. A sprint's shared rounds are the league. */
+function formatOf(tournament: TournamentRow): TournamentFormat {
+  return tournament.settings.format === "sprint" ? "sprint" : "bracket";
+}
+
+function qualifierRoundsOf(tournament: TournamentRow) {
+  if (formatOf(tournament) === "bracket") return 1;
+  return tournament.settings.qualifierRounds ?? DEFAULT_SPRINT_ROUNDS;
+}
 
 function take<T>(result: ResultLike<T>, fallbackMessage = "Database request failed."): T {
   if (result.error) {
@@ -190,8 +208,10 @@ function asTournamentSummary(tournament: TournamentRow, rosterSize: number): Tou
     id: tournament.id,
     title: tournament.title,
     status: tournament.status,
+    format: formatOf(tournament),
     viewSeconds: tournament.settings.viewSeconds ?? DEFAULT_VIEW_SECONDS,
     locationsPerMatch: tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH,
+    qualifierRounds: qualifierRoundsOf(tournament),
     rosterSize,
     currentSelectorRank: tournament.current_selector_rank,
   };
@@ -316,7 +336,7 @@ function buildMatchSummaries(input: {
       ? matchAttempts.filter((attempt) => attempt.player_id !== input.me?.id && attempt.submitted_at).length
       : null;
 
-    let results: MatchResult[] | null = null;
+    let results: RoundResult[] | null = null;
     if (match.status === "complete") {
       results = input.challenges
         .filter((challenge) => challenge.match_id === match.id)
@@ -360,64 +380,102 @@ function buildMatchSummaries(input: {
   });
 }
 
-/** A submitted attempt with no coordinates can only have come from an admin forfeit. */
-function asQualifierRanking(playerMap: Map<string, PlayerRow>) {
-  return (attempt: QualifierAttemptRow): QualifierRanking => ({
-    playerId: attempt.player_id,
-    playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
-    seed: playerMap.get(attempt.player_id)?.seed ?? 0,
-    distanceKm: attempt.distance_km as number,
-    forfeited: attempt.guessed_lat === null,
-  });
+/**
+ * Standings over the shared rounds, counting only players whose card is full. A submitted attempt
+ * with no coordinates can only have come from an admin forfeit.
+ */
+function totalDistanceStandings(
+  players: PlayerRow[],
+  attempts: QualifierAttemptRow[],
+  roundsTotal: number,
+) {
+  const byPlayer = new Map<string, QualifierAttemptRow[]>();
+  for (const attempt of attempts) {
+    if (!attempt.submitted_at) continue;
+    const card = byPlayer.get(attempt.player_id) ?? [];
+    card.push(attempt);
+    byPlayer.set(attempt.player_id, card);
+  }
+  const roster = new Map(players.map((player) => [player.id, player]));
+  const cards = players
+    .filter((player) => (byPlayer.get(player.id)?.length ?? 0) === roundsTotal)
+    .map((player) => {
+      const card = byPlayer.get(player.id) as QualifierAttemptRow[];
+      return {
+        playerId: player.id,
+        seed: player.seed,
+        distances: card.map((attempt) => attempt.distance_km as number),
+        forfeited: card.some((attempt) => attempt.guessed_lat === null),
+      };
+    });
+  return rankByTotalDistance(cards).map((entry) => ({
+    ...entry,
+    player: roster.get(entry.playerId) as PlayerRow,
+  }));
+}
+
+function asQualifierRankings(
+  standings: ReturnType<typeof totalDistanceStandings>,
+): QualifierRanking[] {
+  return standings.map((entry, index) => ({
+    playerId: entry.playerId,
+    playerName: entry.player.name,
+    seed: entry.player.seed ?? index + 1,
+    distanceKm: entry.distanceKm,
+    forfeited: entry.forfeited,
+  }));
+}
+
+function asRoundReveal(qualifier: QualifierRow, attempts: QualifierAttemptRow[], playerMap: Map<string, PlayerRow>): RoundResult {
+  return {
+    sequence: qualifier.sequence,
+    actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
+    guesses: attempts
+      .filter((attempt) => attempt.qualifier_id === qualifier.id && attempt.guessed_lat !== null && attempt.guessed_lng !== null)
+      .map((attempt) => ({
+        playerId: attempt.player_id,
+        playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
+        lat: attempt.guessed_lat as number,
+        lng: attempt.guessed_lng as number,
+        distanceKm: attempt.distance_km as number,
+      }))
+      .sort((left, right) => left.distanceKm - right.distanceKm),
+  };
 }
 
 async function qualifierSummary(
   client: SupabaseClient,
-  tournamentId: string,
+  tournament: TournamentRow,
   players: PlayerRow[],
   me: PlayerRow | null,
 ): Promise<QualifierSummary | null> {
-  const qualifierResult = await client
-    .from("qualifiers")
-    .select("*")
-    .eq("tournament_id", tournamentId)
-    .maybeSingle();
-  if (qualifierResult.error) take(qualifierResult);
-  const qualifier = qualifierResult.data as QualifierRow | null;
-  if (!qualifier) return null;
+  const qualifiers = take(
+    await client.from("qualifiers").select("*").eq("tournament_id", tournament.id).order("sequence"),
+  ) as QualifierRow[];
+  if (!qualifiers.length) return null;
   const attempts = take(
-    await client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id),
+    await client
+      .from("qualifier_attempts")
+      .select("*")
+      .in("qualifier_id", qualifiers.map((qualifier) => qualifier.id)),
   ) as QualifierAttemptRow[];
-  const submitted = attempts.filter((attempt) => attempt.submitted_at);
+
+  const roundsTotal = qualifiers.length;
+  const standings = totalDistanceStandings(players, attempts, roundsTotal);
+  // Every round flips to complete together, so a reveal can never leak a round somebody has left.
+  const revealed = qualifiers.every((qualifier) => qualifier.status === "complete");
   const playerMap = new Map(players.map((player) => [player.id, player]));
-  const rankings = qualifier.status === "complete"
-    ? submitted
-      .sort((left, right) => (left.distance_km ?? Infinity) - (right.distance_km ?? Infinity))
-      .map(asQualifierRanking(playerMap))
-      .sort((left, right) => left.seed - right.seed)
-    : null;
-  const reveal = qualifier.status === "complete"
-    ? {
-      actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
-      guesses: submitted
-        .filter((attempt) => attempt.guessed_lat !== null && attempt.guessed_lng !== null)
-        .map((attempt) => ({
-          playerId: attempt.player_id,
-          playerName: playerMap.get(attempt.player_id)?.name ?? "Unknown Bozo",
-          lat: attempt.guessed_lat as number,
-          lng: attempt.guessed_lng as number,
-          distanceKm: attempt.distance_km as number,
-        }))
-        .sort((left, right) => left.distanceKm - right.distanceKm),
-    }
-    : null;
+
   return {
-    status: qualifier.status,
-    submittedCount: submitted.length,
+    status: revealed ? "complete" : "open",
+    roundsTotal,
+    submittedCount: standings.length,
     totalPlayers: players.length,
-    meSubmitted: Boolean(me && submitted.some((attempt) => attempt.player_id === me.id)),
-    rankings,
-    reveal,
+    meSubmitted: Boolean(me && standings.some((entry) => entry.player.id === me.id)),
+    rankings: revealed ? asQualifierRankings(standings) : null,
+    reveals: revealed
+      ? qualifiers.map((qualifier) => asRoundReveal(qualifier, attempts, playerMap))
+      : null,
   };
 }
 
@@ -453,6 +511,15 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
     };
   }
 
+  return buildAppState(client, tournament, identity, serverNow);
+}
+
+async function buildAppState(
+  client: SupabaseClient,
+  tournament: TournamentRow,
+  identity: Identity | null,
+  serverNow: string,
+): Promise<AppState> {
   const core = await queryCoreState(client, tournament, identity);
   const playerMap = new Map(core.players.map((player) => [player.id, player]));
   const draftSelections: DraftSelectionSummary[] = core.drafts.map((draft) => ({
@@ -464,7 +531,7 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
     unlockedAt: draft.unlocked_at,
     selectedAt: draft.selected_at,
   }));
-  const qualifier = await qualifierSummary(client, tournament.id, core.players, core.me);
+  const qualifier = await qualifierSummary(client, tournament, core.players, core.me);
 
   return {
     configured: true,
@@ -476,6 +543,32 @@ export async function getAppState(identity: Identity | null): Promise<AppState> 
     me: core.me ? asPlayerSummary(core.me) : null,
     serverNow,
   };
+}
+
+/**
+ * Past leagues, newest first. A finished league is never deleted, it just stops being the one
+ * the home page reads, so its board and results vault stay readable here forever.
+ */
+export async function getArchivedTournaments() {
+  if (!hasSupabase()) return [];
+  const client = supabaseAdmin();
+  const rows = take(
+    await client
+      .from("tournaments")
+      .select("id, title, created_at")
+      .eq("status", "complete")
+      .order("created_at", { ascending: false }),
+  ) as Array<{ id: string; title: string; created_at: string }>;
+  return rows.map((row) => ({ id: row.id, title: row.title, playedAt: row.created_at }));
+}
+
+export async function getArchivedState(tournamentId: string): Promise<AppState> {
+  const client = supabaseAdmin();
+  const tournament = one(
+    await client.from("tournaments").select("*").eq("id", tournamentId).eq("status", "complete").maybeSingle(),
+    "That league is not in the archive.",
+  ) as TournamentRow;
+  return buildAppState(client, tournament, null, new Date().toISOString());
 }
 
 export async function claimPlayer(playerId: string) {
@@ -498,8 +591,15 @@ export async function configureTournament(input: {
   players: Array<{ name: string; emoji?: string | null }>;
   viewSeconds: number;
   locationsPerMatch: number;
+  format?: TournamentFormat;
+  qualifierRounds?: number;
 }) {
   const client = supabaseAdmin();
+  const format: TournamentFormat = input.format === "sprint" ? "sprint" : "bracket";
+  const qualifierRounds = format === "sprint" ? input.qualifierRounds ?? DEFAULT_SPRINT_ROUNDS : 1;
+  if (!Number.isInteger(qualifierRounds) || qualifierRounds < 1 || qualifierRounds > 10) {
+    throw new HttpError(400, "A sprint runs between 1 and 10 rounds.");
+  }
   const names = input.players.map((player) => player.name.trim()).filter(Boolean);
   if (names.length < 4 || names.length > 32) {
     throw new HttpError(400, "Configure between 4 and 32 players.");
@@ -514,11 +614,13 @@ export async function configureTournament(input: {
     throw new HttpError(400, "Use between 1 and 5 locations per match.");
   }
 
+  // A finished league is the archive: it keeps its results vault and simply stops being the latest
+  // one. Only an unstarted lobby is disposable, and only it gets deleted.
   const existing = await latestTournament(client);
-  if (existing && existing.status !== "lobby") {
+  if (existing && existing.status !== "lobby" && existing.status !== "complete") {
     throw new HttpError(409, "A tournament is already underway. Finish or reset it first.");
   }
-  if (existing) {
+  if (existing?.status === "lobby") {
     take(await client.from("tournaments").delete().eq("id", existing.id));
   }
 
@@ -528,7 +630,12 @@ export async function configureTournament(input: {
       .insert({
         title: input.title.trim() || "DA GEOGUESSERS: DRAFT SLOT THUNDERDOME",
         status: "lobby",
-        settings: { viewSeconds: input.viewSeconds, locationsPerMatch: input.locationsPerMatch },
+        settings: {
+          viewSeconds: input.viewSeconds,
+          locationsPerMatch: input.locationsPerMatch,
+          format,
+          qualifierRounds,
+        },
       })
       .select("*")
       .single(),
@@ -619,10 +726,8 @@ async function createMatch(
   const qualifierResult = await client
     .from("qualifiers")
     .select("location_id")
-    .eq("tournament_id", tournament.id)
-    .maybeSingle();
-  if (qualifierResult.error) take(qualifierResult);
-  if (qualifierResult.data) used.add((qualifierResult.data as { location_id: string }).location_id);
+    .eq("tournament_id", tournament.id);
+  for (const row of take(qualifierResult) as Array<{ location_id: string }>) used.add(row.location_id);
   const challengeCount = tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH;
   const available = shuffled((await activeLocations(client)).filter((location) => !used.has(location.id)));
   if (available.length < challengeCount) {
@@ -743,16 +848,20 @@ export async function startTournament() {
     await client.from("players").select("*").eq("tournament_id", tournament.id).order("created_at"),
   ) as PlayerRow[];
   if (players.length < 4) throw new HttpError(409, "The roster is too small.");
-  if (players.some((player) => !player.claim_token_hash)) {
+
+  const format = formatOf(tournament);
+  const qualifierRounds = qualifierRoundsOf(tournament);
+  // A sprint opens the moment the commissioner says go: players claim a team and walk straight into
+  // round one, so waiting on the last claim would just keep everyone else standing around.
+  if (format === "bracket" && players.some((player) => !player.claim_token_hash)) {
     throw new HttpError(409, "Every player must claim their name before the tournament starts.");
   }
 
-  const expectedMatches = rankingMatchCount(players.length);
-  const needsQualifier = highestPowerOfTwoAtMost(players.length) !== players.length;
-  const requiredLocations = locationsNeeded(
-    players.length,
-    tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH,
-  );
+  const expectedMatches = format === "sprint" ? 0 : rankingMatchCount(players.length);
+  const needsQualifier = format === "sprint" || highestPowerOfTwoAtMost(players.length) !== players.length;
+  const requiredLocations = format === "sprint"
+    ? qualifierRounds
+    : locationsNeeded(players.length, tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH);
   const validatedLocations = await activeLocations(client);
   if (validatedLocations.length < requiredLocations) {
     throw new HttpError(
@@ -775,10 +884,11 @@ export async function startTournament() {
   }
 
   if (needsQualifier) {
-    const location = shuffled(validatedLocations)[0];
+    const drawn = shuffled(validatedLocations).slice(0, format === "sprint" ? qualifierRounds : 1);
     take(
-      await client.from("qualifiers").insert({
+      await client.from("qualifiers").insert(drawn.map((location, index) => ({
         tournament_id: tournament.id,
+        sequence: index + 1,
         location_id: location.id,
         pano_id: location.pano_id,
         actual_lat: location.lat,
@@ -787,7 +897,7 @@ export async function startTournament() {
         pitch: location.pitch,
         label: location.label,
         country: location.country,
-      }),
+      }))),
     );
     take(
       await client
@@ -796,7 +906,7 @@ export async function startTournament() {
         .eq("id", tournament.id)
         .eq("status", "lobby"),
     );
-    await audit(client, tournament.id, "start_qualifier", { expectedMatches, requiredLocations });
+    await audit(client, tournament.id, "start_qualifier", { format, rounds: drawn.length, expectedMatches, requiredLocations });
     return { expectedMatches, qualifier: true };
   }
 
@@ -824,8 +934,9 @@ async function maybeStartDraftSelection(client: SupabaseClient, tournamentId: st
     .select("status")
     .eq("id", tournamentId)
     .single();
+  // A bracket arrives here from its last match, a sprint straight from the shared rounds.
   const tournament = one(tournamentResult) as { status: string };
-  if (tournament.status !== "tournament") return;
+  if (tournament.status !== "tournament" && tournament.status !== "qualifier") return;
 
   const draftRows = players.map((player) => ({
     tournament_id: tournamentId,
@@ -841,7 +952,7 @@ async function maybeStartDraftSelection(client: SupabaseClient, tournamentId: st
       .from("tournaments")
       .update({ status: "draft_selection", current_selector_rank: 1 })
       .eq("id", tournamentId)
-      .eq("status", "tournament"),
+      .in("status", ["tournament", "qualifier"]),
   );
 }
 
@@ -1009,78 +1120,77 @@ async function finalizeMatchIfReady(client: SupabaseClient, matchId: string) {
   if (completion.data) await advanceGroup(client, match.group_id);
 }
 
+/**
+ * The player's position in the shared rounds: every round in order, their card so far, and the one
+ * they are on. Rounds are strictly sequential, so the active round is the first they have not
+ * submitted, and `null` once their card is full.
+ */
 async function qualifierRows(client: SupabaseClient, player: PlayerRow) {
-  const qualifier = one(
-    await client.from("qualifiers").select("*").eq("tournament_id", player.tournament_id).single(),
-    "The bye-week qualifier does not exist.",
-  ) as QualifierRow;
-  const attemptResult = await client
-    .from("qualifier_attempts")
-    .select("*")
-    .eq("qualifier_id", qualifier.id)
-    .eq("player_id", player.id)
-    .maybeSingle();
-  if (attemptResult.error) take(attemptResult);
-  return { qualifier, attempt: attemptResult.data as QualifierAttemptRow | null };
+  const qualifiers = take(
+    await client.from("qualifiers").select("*").eq("tournament_id", player.tournament_id).order("sequence"),
+  ) as QualifierRow[];
+  if (!qualifiers.length) throw new HttpError(409, "The qualifier does not exist.");
+  const attempts = take(
+    await client
+      .from("qualifier_attempts")
+      .select("*")
+      .in("qualifier_id", qualifiers.map((qualifier) => qualifier.id))
+      .eq("player_id", player.id),
+  ) as QualifierAttemptRow[];
+  const byQualifier = new Map(attempts.map((attempt) => [attempt.qualifier_id, attempt]));
+  const qualifier = qualifiers.find((round) => !byQualifier.get(round.id)?.submitted_at) ?? null;
+  return {
+    qualifiers,
+    qualifier,
+    attempt: qualifier ? byQualifier.get(qualifier.id) ?? null : null,
+    submittedRounds: attempts.filter((attempt) => attempt.submitted_at).length,
+  };
+}
+
+/** Play only ever touches the round the player is on, and refusing beats guessing which one. */
+function activeQualifier(rows: Awaited<ReturnType<typeof qualifierRows>>) {
+  if (!rows.qualifier) throw new HttpError(409, "You already finished every round.");
+  return rows.qualifier;
 }
 
 export async function getQualifierPlayState(identity: Identity | null): Promise<QualifierPlayState> {
   const client = supabaseAdmin();
   const player = await requirePlayer(client, identity);
-  const { qualifier, attempt } = await qualifierRows(client, player);
+  const rows = await qualifierRows(client, player);
   const tournament = one(
-    await client.from("tournaments").select("settings").eq("id", player.tournament_id).single(),
-  ) as { settings: { viewSeconds?: number } };
-  const submittedResult = await client
-    .from("qualifier_attempts")
-    .select("id", { count: "exact", head: true })
-    .eq("qualifier_id", qualifier.id)
-    .not("submitted_at", "is", null);
-  if (submittedResult.error) take(submittedResult);
-  const playerCountResult = await client
-    .from("players")
-    .select("id", { count: "exact", head: true })
-    .eq("tournament_id", player.tournament_id);
-  if (playerCountResult.error) take(playerCountResult);
+    await client.from("tournaments").select("*").eq("id", player.tournament_id).single(),
+  ) as TournamentRow;
+  const [attemptsResult, playersResult] = await Promise.all([
+    client.from("qualifier_attempts").select("*").in("qualifier_id", rows.qualifiers.map((round) => round.id)),
+    client.from("players").select("*").eq("tournament_id", player.tournament_id),
+  ]);
+  const attempts = take(attemptsResult) as QualifierAttemptRow[];
+  const players = take(playersResult) as PlayerRow[];
+  const standings = totalDistanceStandings(players, attempts, rows.qualifiers.length);
 
+  const { qualifier, attempt } = rows;
   let status: ChallengeState["status"] = "ready";
-  if (attempt?.submitted_at) status = "submitted";
+  if (!qualifier) status = "submitted";
   else if (attempt && !attempt.started_at) status = "prepared";
   else if (attempt?.expires_at && new Date(attempt.expires_at).getTime() > Date.now()) status = "viewing";
   else if (attempt?.started_at) status = "guessing";
   const canSeePano = status === "prepared" || status === "viewing";
 
-  let results: QualifierPlayState["results"] = null;
-  if (qualifier.status === "complete") {
-    const [attemptsResult, playersResult] = await Promise.all([
-      client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id),
-      client.from("players").select("*").eq("tournament_id", player.tournament_id),
-    ]);
-    const attempts = take(attemptsResult) as QualifierAttemptRow[];
-    const players = take(playersResult) as PlayerRow[];
-    const playerMap = new Map(players.map((item) => [item.id, item]));
-    results = {
-      actual: { lat: qualifier.actual_lat, lng: qualifier.actual_lng, label: qualifier.label, country: qualifier.country },
-      rankings: attempts
-        .filter((item) => item.submitted_at)
-        .map(asQualifierRanking(playerMap))
-        .sort((left, right) => left.seed - right.seed),
-    };
-  }
-
   return {
     challenge: {
-      id: qualifier.id,
-      sequence: 1,
+      id: qualifier?.id ?? rows.qualifiers[rows.qualifiers.length - 1].id,
+      sequence: qualifier?.sequence ?? rows.qualifiers.length,
       status,
-      ...(canSeePano ? { panoId: qualifier.pano_id, heading: qualifier.heading, pitch: qualifier.pitch } : {}),
+      ...(canSeePano && qualifier ? { panoId: qualifier.pano_id, heading: qualifier.heading, pitch: qualifier.pitch } : {}),
       ...(attempt?.expires_at ? { expiresAt: attempt.expires_at } : {}),
     },
+    totalRounds: rows.qualifiers.length,
+    format: formatOf(tournament),
     serverNow: new Date().toISOString(),
     viewSeconds: tournament.settings.viewSeconds ?? DEFAULT_VIEW_SECONDS,
-    submittedCount: submittedResult.count ?? 0,
-    totalPlayers: playerCountResult.count ?? 0,
-    results,
+    submittedCount: standings.length,
+    totalPlayers: players.length,
+    finished: rows.qualifiers.every((round) => round.status === "complete"),
   };
 }
 
@@ -1089,8 +1199,9 @@ export async function prepareQualifier(identity: Identity | null) {
   const player = await requirePlayer(client, identity);
   const tournament = await latestTournament(client);
   if (!tournament || tournament.id !== player.tournament_id || tournament.status !== "qualifier") throw new HttpError(409, "The qualifier is not open.");
-  const { qualifier, attempt } = await qualifierRows(client, player);
-  if (!attempt) {
+  const rows = await qualifierRows(client, player);
+  const qualifier = activeQualifier(rows);
+  if (!rows.attempt) {
     const result = await client.from("qualifier_attempts").insert({ qualifier_id: qualifier.id, player_id: player.id });
     if (result.error && result.error.code !== "23505") take(result);
   }
@@ -1120,34 +1231,57 @@ export async function finishQualifierViewing(identity: Identity | null) {
   return getQualifierPlayState(identity);
 }
 
-async function finalizeQualifierIfReady(client: SupabaseClient, qualifier: QualifierRow) {
-  const players = take(await client.from("players").select("*").eq("tournament_id", qualifier.tournament_id)) as PlayerRow[];
-  const attempts = take(await client.from("qualifier_attempts").select("*").eq("qualifier_id", qualifier.id).not("submitted_at", "is", null)) as QualifierAttemptRow[];
-  if (attempts.length !== players.length) return;
-  const fallbackSeed = new Map(players.map((player) => [player.id, player.seed ?? Infinity]));
-  const ranked = [...attempts].sort((left, right) => (left.distance_km as number) - (right.distance_km as number) || (fallbackSeed.get(left.player_id) ?? Infinity) - (fallbackSeed.get(right.player_id) ?? Infinity));
-  const claim = await client.from("qualifiers").update({ status: "complete", completed_at: new Date().toISOString() }).eq("id", qualifier.id).eq("status", "open").select("id").maybeSingle();
+/**
+ * Nothing is revealed until every player has finished every shared round, so the rounds flip to
+ * complete as one. A bracket then seeds its ladder; a sprint has no ladder, so the standings are
+ * the final ranking and the draft opens on the spot.
+ */
+async function finalizeQualifierIfReady(client: SupabaseClient, tournamentId: string) {
+  const tournament = one(await client.from("tournaments").select("*").eq("id", tournamentId).single()) as TournamentRow;
+  const qualifiers = take(await client.from("qualifiers").select("*").eq("tournament_id", tournamentId).order("sequence")) as QualifierRow[];
+  if (!qualifiers.length || qualifiers.every((round) => round.status === "complete")) return;
+  const players = take(await client.from("players").select("*").eq("tournament_id", tournamentId)) as PlayerRow[];
+  const attempts = take(await client.from("qualifier_attempts").select("*").in("qualifier_id", qualifiers.map((round) => round.id))) as QualifierAttemptRow[];
+  const ranked = totalDistanceStandings(players, attempts, qualifiers.length);
+  if (ranked.length !== players.length) return;
+
+  const claim = await client.from("qualifiers").update({ status: "complete", completed_at: new Date().toISOString() }).eq("tournament_id", tournamentId).eq("status", "open").select("id");
   if (claim.error) take(claim);
-  if (!claim.data) return;
-  take(await client.from("players").update({ seed: null }).eq("tournament_id", qualifier.tournament_id));
-  for (let index = 0; index < ranked.length; index += 1) take(await client.from("players").update({ seed: index + 1 }).eq("id", ranked[index].player_id));
-  const tournament = one(await client.from("tournaments").select("*").eq("id", qualifier.tournament_id).single()) as TournamentRow;
-  await createRankingGroup(client, tournament, ranked.map((attempt) => attempt.player_id), 1);
-  take(await client.from("tournaments").update({ status: "tournament" }).eq("id", qualifier.tournament_id).eq("status", "qualifier"));
-  await audit(client, qualifier.tournament_id, "complete_qualifier", { earnedByePlayerIds: ranked.slice(0, openingRound(ranked).byes.length).map((attempt) => attempt.player_id) });
+  if (!claim.data?.length) return;
+
+  take(await client.from("players").update({ seed: null }).eq("tournament_id", tournamentId));
+  for (let index = 0; index < ranked.length; index += 1) {
+    take(await client.from("players").update({ seed: index + 1 }).eq("id", ranked[index].player.id));
+  }
+
+  if (formatOf(tournament) === "sprint") {
+    for (let index = 0; index < ranked.length; index += 1) {
+      take(await client.from("players").update({ tournament_rank: index + 1 }).eq("id", ranked[index].player.id));
+    }
+    await audit(client, tournamentId, "complete_sprint", { rounds: qualifiers.length, ranking: ranked.map((entry) => entry.player.name) });
+    await maybeStartDraftSelection(client, tournamentId);
+    return;
+  }
+
+  const entrants = ranked.map((entry) => entry.player.id);
+  await createRankingGroup(client, tournament, entrants, 1);
+  take(await client.from("tournaments").update({ status: "tournament" }).eq("id", tournamentId).eq("status", "qualifier"));
+  await audit(client, tournamentId, "complete_qualifier", { earnedByePlayerIds: entrants.slice(0, openingRound(entrants).byes.length) });
 }
 
 export async function submitQualifierGuess(identity: Identity | null, guess: { lat: number; lng: number }) {
   if (!Number.isFinite(guess.lat) || guess.lat < -90 || guess.lat > 90 || !Number.isFinite(guess.lng) || guess.lng < -180 || guess.lng > 180) throw new HttpError(400, "That guess is not on Earth.");
   const client = supabaseAdmin();
   const player = await requirePlayer(client, identity);
-  const { qualifier, attempt } = await qualifierRows(client, player);
+  const rows = await qualifierRows(client, player);
+  const qualifier = activeQualifier(rows);
+  const attempt = rows.attempt;
   if (!attempt?.started_at || !attempt.expires_at) throw new HttpError(409, "Start the qualifier before guessing.");
   if (new Date(attempt.expires_at).getTime() > Date.now() + 1000) throw new HttpError(409, "Finish viewing before submitting.");
   const update = await client.from("qualifier_attempts").update({ guessed_lat: guess.lat, guessed_lng: guess.lng, distance_km: haversineKm({ lat: qualifier.actual_lat, lng: qualifier.actual_lng }, guess), submitted_at: new Date().toISOString() }).eq("id", attempt.id).is("submitted_at", null).select("id").maybeSingle();
   if (update.error) take(update);
   if (!update.data) throw new HttpError(409, "That qualifier guess is already locked.");
-  await finalizeQualifierIfReady(client, qualifier);
+  await finalizeQualifierIfReady(client, player.tournament_id);
   return getQualifierPlayState(identity);
 }
 
@@ -1388,17 +1522,18 @@ export async function getAdminState(): Promise<AdminState> {
   }
 
   const core = await queryCoreState(client, tournament, null);
-  const expectedMatchCount = rankingMatchCount(core.players.length);
-  const requiredLocationCount = locationsNeeded(
-    core.players.length,
-    tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH,
-  );
-  const qualifierResult = await client.from("qualifiers").select("id").eq("tournament_id", tournament.id).maybeSingle();
-  if (qualifierResult.error) take(qualifierResult);
+  const sprint = formatOf(tournament) === "sprint";
+  const expectedMatchCount = sprint ? 0 : rankingMatchCount(core.players.length);
+  const requiredLocationCount = sprint
+    ? qualifierRoundsOf(tournament)
+    : locationsNeeded(core.players.length, tournament.settings.locationsPerMatch ?? DEFAULT_LOCATIONS_PER_MATCH);
+  const qualifiers = take(await client.from("qualifiers").select("id").eq("tournament_id", tournament.id)) as Array<{ id: string }>;
   let qualifierSubmittedPlayerIds: string[] = [];
-  if (qualifierResult.data) {
-    const submitted = take(await client.from("qualifier_attempts").select("player_id").eq("qualifier_id", (qualifierResult.data as { id: string }).id).not("submitted_at", "is", null)) as Array<{ player_id: string }>;
-    qualifierSubmittedPlayerIds = submitted.map((row) => row.player_id);
+  if (qualifiers.length) {
+    const attempts = take(await client.from("qualifier_attempts").select("*").in("qualifier_id", qualifiers.map((round) => round.id))) as QualifierAttemptRow[];
+    // The roster row means "done", so a player halfway through a sprint is still outstanding.
+    qualifierSubmittedPlayerIds = totalDistanceStandings(core.players, attempts, qualifiers.length)
+      .map((entry) => entry.player.id);
   }
   return {
     tournament: asTournamentSummary(tournament, core.players.length),
@@ -1505,20 +1640,24 @@ export async function forfeitPlayer(playerId: string) {
   }
 
   if (tournament.status === "qualifier") {
-    const { qualifier, attempt } = await qualifierRows(client, player);
-    if (qualifier.status === "complete") throw new HttpError(409, "The qualifier already finished.");
-    if (attempt?.submitted_at) throw new HttpError(409, `${player.name} already submitted a guess.`);
+    const rows = await qualifierRows(client, player);
+    if (!rows.qualifier) throw new HttpError(409, `${player.name} already played every round.`);
+    // A no-show forfeits the rest of their card, not just the round they stalled on.
+    const remaining = rows.qualifiers.filter((round) => round.sequence >= (rows.qualifier as QualifierRow).sequence);
     const forfeit = {
       guessed_lat: null,
       guessed_lng: null,
       distance_km: FORFEIT_DISTANCE_KM,
       submitted_at: new Date().toISOString(),
     };
-    take(attempt
-      ? await client.from("qualifier_attempts").update(forfeit).eq("id", attempt.id).is("submitted_at", null)
-      : await client.from("qualifier_attempts").insert({ qualifier_id: qualifier.id, player_id: player.id, ...forfeit }));
-    await audit(client, tournament.id, "forfeit_qualifier", { playerId, name: player.name });
-    await finalizeQualifierIfReady(client, qualifier);
+    for (const round of remaining) {
+      const existing = round.id === rows.attempt?.qualifier_id ? rows.attempt : null;
+      take(existing
+        ? await client.from("qualifier_attempts").update(forfeit).eq("id", existing.id).is("submitted_at", null)
+        : await client.from("qualifier_attempts").insert({ qualifier_id: round.id, player_id: player.id, ...forfeit }));
+    }
+    await audit(client, tournament.id, "forfeit_qualifier", { playerId, name: player.name, rounds: remaining.length });
+    await finalizeQualifierIfReady(client, tournament.id);
     return getAdminState();
   }
 
@@ -1586,8 +1725,8 @@ export async function resetQualifierAttempt(playerId: string) {
   const client = supabaseAdmin();
   const tournament = await latestTournament(client);
   if (!tournament || tournament.status !== "qualifier") throw new HttpError(409, "The qualifier is not open.");
-  const qualifier = one(await client.from("qualifiers").select("id").eq("tournament_id", tournament.id).single()) as { id: string };
-  take(await client.from("qualifier_attempts").delete().eq("qualifier_id", qualifier.id).eq("player_id", playerId));
+  const qualifiers = take(await client.from("qualifiers").select("id").eq("tournament_id", tournament.id)) as Array<{ id: string }>;
+  take(await client.from("qualifier_attempts").delete().in("qualifier_id", qualifiers.map((round) => round.id)).eq("player_id", playerId));
   await audit(client, tournament.id, "reset_qualifier_attempt", { playerId });
   return getAdminState();
 }
@@ -1743,6 +1882,11 @@ export async function resetTournament() {
   const client = supabaseAdmin();
   const tournament = await latestTournament(client);
   if (!tournament) return getAdminState();
+  // Reset wipes the league you are running, never a finished one. Its results are the archive, and
+  // a delete here cascades them away for good.
+  if (tournament.status === "complete") {
+    throw new HttpError(409, "That league is already finished. Configure the next one instead.");
+  }
   take(await client.from("tournaments").delete().eq("id", tournament.id));
   await audit(client, null, "reset_tournament", { deletedTournamentId: tournament.id });
   return getAdminState();

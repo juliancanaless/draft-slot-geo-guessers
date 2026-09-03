@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm } from "../src/lib/scoring";
+import { compareDistanceCards, FORFEIT_DISTANCE_KM, haversineKm, rankByTotalDistance } from "../src/lib/scoring";
 import { byeCount, highestPowerOfTwoAtMost, locationsNeeded, openingRound, pairHighLow, rankingMatchCount, rosterCapacity } from "../src/lib/tournament";
 
 test("haversine produces a realistic London to Paris distance", () => {
@@ -90,4 +90,29 @@ test("a forfeit always sorts behind the worst real guess", () => {
   ];
   for (const distance of antipodes) assert.ok(distance < FORFEIT_DISTANCE_KM);
   assert.ok(Math.max(...antipodes) > 20000);
+});
+
+test("a sprint ranks on total distance, not on winning individual rounds", () => {
+  const ranked = rankByTotalDistance([
+    { playerId: "steady", seed: 2, distances: [900, 900, 900], forfeited: false },
+    { playerId: "spiky", seed: 1, distances: [10, 10, 5000], forfeited: false },
+  ]);
+  assert.deepEqual(ranked.map((card) => card.playerId), ["steady", "spiky"]);
+  assert.equal(ranked[0].distanceKm, 2700);
+});
+
+test("a sprint tie falls back to the higher seed", () => {
+  const ranked = rankByTotalDistance([
+    { playerId: "late", seed: 7, distances: [100, 100], forfeited: false },
+    { playerId: "early", seed: 3, distances: [50, 150], forfeited: false },
+  ]);
+  assert.deepEqual(ranked.map((card) => card.playerId), ["early", "late"]);
+});
+
+test("one forfeited round buries a sprint card behind every full one", () => {
+  const ranked = rankByTotalDistance([
+    { playerId: "noshow", seed: 1, distances: [0, FORFEIT_DISTANCE_KM], forfeited: true },
+    { playerId: "awful", seed: 9, distances: [19000, 19000], forfeited: false },
+  ]);
+  assert.deepEqual(ranked.map((card) => card.playerId), ["awful", "noshow"]);
 });

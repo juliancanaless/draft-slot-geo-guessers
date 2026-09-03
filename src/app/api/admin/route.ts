@@ -44,6 +44,8 @@ export async function POST(request: Request) {
           title: requiredString(body, "title"),
           viewSeconds: requiredNumber(body, "viewSeconds"),
           locationsPerMatch: requiredNumber(body, "locationsPerMatch"),
+          format: body.format === "sprint" ? "sprint" : "bracket",
+          qualifierRounds: typeof body.qualifierRounds === "number" ? body.qualifierRounds : undefined,
           players: players.map((player) => {
             if (!player || typeof player !== "object") throw new HttpError(400, "Invalid player.");
             const value = player as Record<string, unknown>;

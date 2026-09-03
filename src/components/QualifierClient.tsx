@@ -44,16 +44,19 @@ export default function QualifierClient() {
   }, [act, state]);
   useEffect(() => { expiring.current = false; }, [state?.challenge.id]);
 
-  if (!state) return <main className="page-shell"><section className="panel"><h1>LOADING THE BYE-WEEK BLOODBATH...</h1>{error && <p className="error-box">{error}</p>}</section></main>;
+  if (!state) return <main className="page-shell"><section className="panel"><h1>LOADING...</h1>{error && <p className="error-box">{error}</p>}</section></main>;
   const challenge = state.challenge;
+  const sprint = state.format === "sprint";
+  const title = sprint ? "THE SPRINT" : "THE BYE-WEEK BLOODBATH";
+  const round = `LOCATION ${challenge.sequence} OF ${state.totalRounds}`;
   return <main className={styles.gameShell}>
-    <header className={styles.gameHeader}><Link href="/">← HOME</Link><strong>THE BYE-WEEK BLOODBATH</strong><span>ONE LOCATION • TOP SEEDS EARN BYES</span></header>
+    <header className={styles.gameHeader}><Link href="/">← HOME</Link><strong>{title}</strong><span>{sprint ? `${round} • LOWEST TOTAL WINS` : "ONE LOCATION • TOP SEEDS EARN BYES"}</span></header>
     {error && <div className="error-box">🚨 {error}</div>}
-    {state.results ? <section className={`${styles.centerCard} panel`}><h1>QUALIFIER COMPLETE</h1><p>THE BYES HAVE BEEN EARNED. THE BRACKET IS LIVE.</p><Link className="btn" href="/">VIEW THE BRACKET</Link></section>
-      : challenge.status === "submitted" ? <section className={`${styles.centerCard} panel`}><h1>GUESS LOCKED</h1><p className="pixel-copy">{state.submittedCount} / {state.totalPlayers} FINISHED. SCORES STAY SECRET UNTIL EVERYONE IS DONE.</p><Link className="btn" href="/">BACK HOME</Link></section>
-      : challenge.status === "ready" ? <section className={`${styles.centerCard} panel`}><h1>ONE LOCATION. FOUR BYES.</h1><p className="pixel-copy">Closest guesses earn the byes. You have {state.viewSeconds} seconds. Nobody sees any score until all players finish.</p><button className="btn btn-hot" disabled={busy} onClick={() => void act("prepare")}>LOAD THE QUALIFIER</button></section>
+    {state.finished ? <section className={`${styles.centerCard} panel`}><h1>{sprint ? "THE SPRINT IS OVER" : "QUALIFIER COMPLETE"}</h1><p>{sprint ? "EVERY CARD IS IN. GO PICK YOUR SLOT." : "THE BYES HAVE BEEN EARNED. THE BRACKET IS LIVE."}</p><Link className="btn" href="/">{sprint ? "VIEW THE RESULTS" : "VIEW THE BRACKET"}</Link></section>
+      : challenge.status === "submitted" ? <section className={`${styles.centerCard} panel`}><h1>{sprint ? "CARD LOCKED" : "GUESS LOCKED"}</h1><p className="pixel-copy">{state.submittedCount} / {state.totalPlayers} FINISHED. SCORES STAY SECRET UNTIL EVERYONE IS DONE.</p><Link className="btn" href="/">BACK HOME</Link></section>
+      : challenge.status === "ready" ? <section className={`${styles.centerCard} panel`}><h1>{sprint ? round : "ONE LOCATION. FOUR BYES."}</h1><p className="pixel-copy">{sprint ? `Your distances across all ${state.totalRounds} locations add up, and the lowest total drafts first.` : "Closest guesses earn the byes."} You have {state.viewSeconds} seconds. Nobody sees any score until all players finish.</p><button className="btn btn-hot" disabled={busy} onClick={() => void act("prepare")}>{sprint && challenge.sequence > 1 ? "LOAD THE NEXT ONE" : "LOAD THE FIRST LOCATION"}</button></section>
       : challenge.status === "prepared" || challenge.status === "viewing" ? <StreetView challenge={challenge} busy={busy} remaining={remaining} onLoaded={start} onGuess={finish} />
-      : challenge.status === "guessing" ? <GuessMap busy={busy} guess={guess} setGuess={setGuess} submit={() => { if (guess && window.confirm("LOCK IN THIS QUALIFIER GUESS?")) void act("submit-guess", guess); }} />
+      : challenge.status === "guessing" ? <GuessMap busy={busy} guess={guess} setGuess={setGuess} submit={() => { if (guess && window.confirm(`LOCK IN ${round}?`)) void act("submit-guess", guess); }} />
       : null}
   </main>;
 }

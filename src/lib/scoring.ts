@@ -17,6 +17,26 @@ export function haversineKm(actual: { lat: number; lng: number }, guess: { lat: 
   return 2 * EARTH_RADIUS_KM * Math.asin(Math.sqrt(a));
 }
 
+/** One player's card across the shared rounds every player faces. */
+export type SharedRoundCard = {
+  playerId: string;
+  /** Breaks a tie by whoever was seeded higher going in. */
+  seed: number | null;
+  distances: number[];
+  forfeited: boolean;
+};
+
+/**
+ * The sprint's whole result: distances add up and the lowest total drafts first, so a great round
+ * cannot be undone by one bad one and a forfeit's placeholder distance buries the card it is on.
+ */
+export function rankByTotalDistance(cards: SharedRoundCard[]) {
+  return cards
+    .map((card) => ({ ...card, distanceKm: card.distances.reduce((total, distance) => total + distance, 0) }))
+    .sort((left, right) => left.distanceKm - right.distanceKm
+      || (left.seed ?? Infinity) - (right.seed ?? Infinity));
+}
+
 export function compareDistanceCards(player1: number[], player2: number[]): -1 | 0 | 1 {
   const total1 = player1.reduce((sum, distance) => sum + distance, 0);
   const total2 = player2.reduce((sum, distance) => sum + distance, 0);

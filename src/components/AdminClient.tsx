@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { loadGoogleMaps } from "@/lib/google-maps";
 import { rosterCapacity } from "@/lib/tournament";
-import type { AdminState, LocationCandidate } from "@/lib/types";
+import type { AdminState, LocationCandidate, TournamentFormat } from "@/lib/types";
 import styles from "./AdminClient.module.css";
 
 const SECRET_KEY = "draft-slot-admin-secret";
@@ -28,6 +28,8 @@ export default function AdminClient() {
   const [names, setNames] = useState(DEFAULT_NAMES);
   const [viewSeconds, setViewSeconds] = useState(60);
   const [locationsPerMatch, setLocationsPerMatch] = useState(3);
+  const [format, setFormat] = useState<TournamentFormat>("sprint");
+  const [qualifierRounds, setQualifierRounds] = useState(3);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState("");
@@ -81,7 +83,7 @@ export default function AdminClient() {
 
   async function configure() {
     const players = names.split("\n").map((name) => name.trim()).filter(Boolean).map((name) => ({ name }));
-    await action({ action: "configure", title, viewSeconds, locationsPerMatch, players }, `Replace the lobby roster with ${players.length} players?`);
+    await action({ action: "configure", title, viewSeconds, locationsPerMatch, format, qualifierRounds, players }, `Start a new ${format} league with ${players.length} players?`);
   }
 
   async function validateLocations() {
@@ -138,7 +140,10 @@ export default function AdminClient() {
     });
   }
 
-  const allClaimed = useMemo(() => Boolean(state?.players.length && state.players.every((player) => player.claimed)), [state]);
+  const allClaimed = Boolean(state?.players.length && state.players.every((player) => player.claimed));
+  const sprint = state?.tournament?.format === "sprint";
+  // A sprint lets people wander in mid-league, so only a bracket has to wait for the full roster.
+  const needsClaims = !sprint && !allClaimed;
   // Who the tournament is currently waiting on, and therefore who forfeiting would unblock.
   const forfeitable = useMemo(() => {
     if (state?.tournament?.status === "qualifier") {
@@ -169,15 +174,20 @@ export default function AdminClient() {
       {error && <div className="error-box">🚨 {error}</div>}
       {progress && <div className="notice-box">{progress}</div>}
 
-      {!state.tournament && (
+      {(!state.tournament || state.tournament.status === "complete") && (
         <section className="panel">
           <h2 className="panel-title">1. CONFIGURE THE LOBBY</h2>
+          {state.tournament && <div className="notice-box">{state.tournament.title} is finished. Its results stay readable at /archive once the next league starts.</div>}
           <label className={styles.label}>SEASON TITLE<input className={styles.input} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
           <label className={styles.label}>PLAYER NAMES — ONE PER LINE<textarea className={styles.textarea} value={names} onChange={(event) => setNames(event.target.value)} /></label>
           <div className={styles.settings}>
+            <label className={styles.label}>FORMAT<select className={styles.input} value={format} onChange={(event) => setFormat(event.target.value as TournamentFormat)}><option value="sprint">SPRINT — shared rounds, total distance ranks</option><option value="bracket">BRACKET — qualifier then knockouts</option></select></label>
             <label className={styles.label}>VIEW SECONDS<input className={styles.input} type="number" min="15" max="300" value={viewSeconds} onChange={(event) => setViewSeconds(Number(event.target.value))} /></label>
-            <label className={styles.label}>LOCATIONS / MATCH<input className={styles.input} type="number" min="1" max="5" value={locationsPerMatch} onChange={(event) => setLocationsPerMatch(Number(event.target.value))} /></label>
+            {format === "sprint"
+              ? <label className={styles.label}>SPRINT ROUNDS<input className={styles.input} type="number" min="1" max="10" value={qualifierRounds} onChange={(event) => setQualifierRounds(Number(event.target.value))} /></label>
+              : <label className={styles.label}>LOCATIONS / MATCH<input className={styles.input} type="number" min="1" max="5" value={locationsPerMatch} onChange={(event) => setLocationsPerMatch(Number(event.target.value))} /></label>}
           </div>
+          <div className="notice-box">{format === "sprint" ? `Everybody plays the same ${qualifierRounds} locations whenever they arrive. Lowest total distance drafts first, and the draft opens the moment the last card lands.` : "A shared qualifier seeds the byes, then a full knockout ladder ranks everyone."}</div>
           <button className="btn" disabled={busy} onClick={() => void configure()}>CREATE THIS BEAUTIFUL DISASTER</button>
         </section>
       )}
@@ -196,7 +206,7 @@ export default function AdminClient() {
           <section className="panel panel-purple">
             <h2 className="panel-title">TOURNAMENT STATE: {state.tournament.status}</h2>
             <p className="pixel-copy">{state.players.length} PLAYERS • {state.expectedMatchCount} TOTAL MATCHES • {state.requiredLocationCount} UNIQUE LOCATIONS NEEDED</p>
-            {state.tournament.status === "lobby" && <><div className="notice-box">{!allClaimed ? `${state.players.filter((player) => player.claimed).length} / ${state.players.length} players claimed — everybody must claim before starting.` : state.activeLocationCount < state.requiredLocationCount ? `${state.activeLocationCount} / ${state.requiredLocationCount} locations ready — validate more before starting.` : `READY TO START: all ${state.players.length} players claimed and ${state.activeLocationCount} locations validated.`}</div><div className="button-row"><button className="btn" disabled={busy || !allClaimed || state.activeLocationCount < state.requiredLocationCount} onClick={() => void action({ action: "start-tournament" }, "Randomize seeds and start? The bracket becomes real now.")}>START THE THUNDERDOME</button></div></>}
+            {state.tournament.status === "lobby" && <><div className="notice-box">{needsClaims ? `${state.players.filter((player) => player.claimed).length} / ${state.players.length} players claimed — everybody must claim before a bracket starts.` : state.activeLocationCount < state.requiredLocationCount ? `${state.activeLocationCount} / ${state.requiredLocationCount} locations ready — validate more before starting.` : sprint ? `READY TO START: ${state.activeLocationCount} locations validated. Players claim a team and play as they arrive.` : `READY TO START: all ${state.players.length} players claimed and ${state.activeLocationCount} locations validated.`}</div><div className="button-row"><button className="btn" disabled={busy || needsClaims || state.activeLocationCount < state.requiredLocationCount} onClick={() => void action({ action: "start-tournament" }, sprint ? "Open the sprint? Anybody who has claimed can start playing immediately." : "Randomize seeds and start? The bracket becomes real now.")}>{sprint ? "OPEN THE SPRINT" : "START THE THUNDERDOME"}</button></div></>}
             {state.tournament.status === "tournament" && state.matches.every((match) => match.status === "ready") && <div className="button-row"><button className="btn btn-danger" disabled={busy} onClick={() => void action({ action: "regenerate-bracket" }, "Nobody has started. Reroll the bracket and all assigned locations?")}>REROLL UNPLAYED BRACKET</button></div>}
           </section>
 

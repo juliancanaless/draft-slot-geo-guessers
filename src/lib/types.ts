@@ -1,6 +1,13 @@
 export type TournamentStatus = "lobby" | "qualifier" | "tournament" | "draft_selection" | "complete";
 export type MatchStatus = "ready" | "in_progress" | "complete";
 
+/**
+ * `bracket` plays one shared qualifier to seed byes and then a full knockout ladder.
+ * `sprint` skips the ladder: the shared rounds are the whole league, and total distance
+ * across them is the final ranking that opens the draft.
+ */
+export type TournamentFormat = "bracket" | "sprint";
+
 export type PlayerSummary = {
   id: string;
   name: string;
@@ -27,7 +34,7 @@ export type Reveal = {
   }>;
 };
 
-export type MatchResult = Reveal & { sequence: number };
+export type RoundResult = Reveal & { sequence: number };
 
 export type MatchSummary = {
   id: string;
@@ -43,7 +50,7 @@ export type MatchSummary = {
   winnerId: string | null;
   mySubmittedCount: number;
   opponentSubmittedCount: number | null;
-  results: MatchResult[] | null;
+  results: RoundResult[] | null;
 };
 
 export type DraftSelectionSummary = {
@@ -60,8 +67,11 @@ export type TournamentSummary = {
   id: string;
   title: string;
   status: TournamentStatus;
+  format: TournamentFormat;
   viewSeconds: number;
   locationsPerMatch: number;
+  /** Shared rounds every player faces. Always 1 in a bracket, the whole league in a sprint. */
+  qualifierRounds: number;
   rosterSize: number;
   currentSelectorRank: number | null;
 };
@@ -82,6 +92,7 @@ export type QualifierRanking = {
   playerId: string;
   playerName: string;
   seed: number;
+  /** Total across every shared round, which is why lower always wins. */
   distanceKm: number;
   /** Admin marked them a no-show, so the distance is a placeholder that sorts last. */
   forfeited: boolean;
@@ -89,23 +100,25 @@ export type QualifierRanking = {
 
 export type QualifierSummary = {
   status: "open" | "complete";
+  roundsTotal: number;
+  /** Players who have finished every round, not individual guesses. */
   submittedCount: number;
   totalPlayers: number;
   meSubmitted: boolean;
   rankings: QualifierRanking[] | null;
-  reveal: Reveal | null;
+  reveals: RoundResult[] | null;
 };
 
 export type QualifierPlayState = {
   challenge: ChallengeState;
+  totalRounds: number;
+  format: TournamentFormat;
   serverNow: string;
   viewSeconds: number;
   submittedCount: number;
   totalPlayers: number;
-  results: {
-    actual: Reveal["actual"];
-    rankings: QualifierRanking[];
-  } | null;
+  /** Set once every player has finished, which is the only time scores stop being secret. */
+  finished: boolean;
 };
 
 export type Identity = { playerId: string; token: string };
